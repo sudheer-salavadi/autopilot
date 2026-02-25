@@ -6,6 +6,7 @@ import {
   IconCheck,
   IconChevronDown,
   IconFolder,
+  IconLayersIntersect,
   IconLayoutDashboard,
   IconLogout,
   IconPlus,
@@ -123,6 +124,17 @@ export default function AppSidebar({
                     <Link href={`/projects/${currentSlug}/integrations`}>
                       <IconPuzzle />
                       Integrations
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    asChild
+                    isActive={pathname === `/projects/${currentSlug}/clusters`}
+                  >
+                    <Link href={`/projects/${currentSlug}/clusters`}>
+                      <IconLayersIntersect />
+                      Clusters
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>

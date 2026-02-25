@@ -1,10 +1,11 @@
+import asyncio
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.session import get_db
+from app.db.session import AsyncSessionLocal, get_db
 from app.models.event import Event
 from app.models.integration import Integration, IntegrationType
 from app.services.webhooks import (
@@ -14,6 +15,16 @@ from app.services.webhooks import (
 )
 
 router = APIRouter(prefix="/api/webhooks", tags=["webhooks"])
+
+
+async def _trigger_evaluate(project_id: uuid.UUID) -> None:
+    """Run evaluate_project in a fresh DB session (safe for background tasks)."""
+    from app.services.evaluator import evaluate_project
+    try:
+        async with AsyncSessionLocal() as db:
+            await evaluate_project(project_id, db)
+    except Exception:
+        pass
 
 
 async def _get_active_integration(
@@ -67,6 +78,8 @@ async def stripe_webhook(
         payload=event_data,
         is_demo=False,
     ))
+    await db.commit()
+    asyncio.create_task(_trigger_evaluate(project_id))
     return {"received": True}
 
 
@@ -87,6 +100,8 @@ async def sentry_webhook(
         payload=payload,
         is_demo=False,
     ))
+    await db.commit()
+    asyncio.create_task(_trigger_evaluate(project_id))
     return {"received": True}
 
 
@@ -107,4 +122,6 @@ async def fullstory_webhook(
         payload=payload,
         is_demo=False,
     ))
+    await db.commit()
+    asyncio.create_task(_trigger_evaluate(project_id))
     return {"received": True}

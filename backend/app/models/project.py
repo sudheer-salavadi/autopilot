@@ -38,6 +38,12 @@ class Project(Base, TimestampMixin):
     events: Mapped[list["Event"]] = relationship(  # noqa: F821
         "Event", back_populates="project", cascade="all, delete-orphan"
     )
+    clusters: Mapped[list["Cluster"]] = relationship(  # noqa: F821
+        "Cluster", back_populates="project", cascade="all, delete-orphan"
+    )
+    scoring_config: Mapped["ProjectScoringConfig"] = relationship(  # noqa: F821
+        "ProjectScoringConfig", back_populates="project", uselist=False, cascade="all, delete-orphan"
+    )
 
 
 class ProjectMember(Base, TimestampMixin):
