@@ -3,6 +3,7 @@ import IntegrationsPanel, {
   type Integration,
   type Project,
 } from "@/components/IntegrationsPanel";
+import { type GithubConfig } from "@/components/GitHubConfig";
 
 interface ScoringConfig {
   simulate_stripe: boolean;
@@ -16,10 +17,11 @@ export default async function IntegrationsPage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
-  const [project, integrations, scoringConfig] = await Promise.all([
+  const [project, integrations, scoringConfig, githubConfig] = await Promise.all([
     apiServer<Project>(`/api/projects/${slug}`),
     apiServer<Integration[]>(`/api/projects/${slug}/integrations`),
     apiServer<ScoringConfig>(`/api/projects/${slug}/scoring-config`).catch(() => null),
+    apiServer<GithubConfig>(`/api/projects/${slug}/github-config`).catch(() => null),
   ]);
 
   const initialSimulatingTypes = [
@@ -29,15 +31,14 @@ export default async function IntegrationsPage({
   ].filter(Boolean) as string[];
 
   return (
-    <>
     <div className="-mx-6 -mt-6">
       <h1 className="text-2xl font-bold px-4 py-2 border-b">Integrations</h1>
       <IntegrationsPanel
         project={project}
         initialIntegrations={integrations}
         initialSimulatingTypes={initialSimulatingTypes}
+        initialGithubConfig={githubConfig ?? undefined}
       />
     </div>
-    </>
   );
 }

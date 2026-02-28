@@ -1,4 +1,3 @@
-import asyncio
 import uuid
 from datetime import datetime, timezone
 
@@ -8,10 +7,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_project_member
-from app.db.session import AsyncSessionLocal, get_db
+from app.db.session import get_db
 from app.models.event import Event
 from app.models.scoring_config import ProjectScoringConfig
 from app.services.demo import generate_demo_events
+from app.services.outbox import enqueue_evaluation
 
 router = APIRouter()
 
@@ -22,16 +22,6 @@ class DemoRequest(BaseModel):
 
 class SimulateToggle(BaseModel):
     active: bool
-
-
-async def _trigger_evaluate(project_id: uuid.UUID) -> None:
-    """Run evaluate_project in a fresh DB session (safe for background tasks)."""
-    from app.services.evaluator import evaluate_project
-    try:
-        async with AsyncSessionLocal() as db:
-            await evaluate_project(project_id, db)
-    except Exception:
-        pass
 
 
 @router.post("/api/projects/{slug}/demo-ingest")
@@ -81,8 +71,8 @@ async def ingest_demo_events(
             )
         )
 
+    await enqueue_evaluation(project.id, db)
     await db.commit()
-    asyncio.create_task(_trigger_evaluate(project.id))
     return {"inserted": len(events_data)}
 
 

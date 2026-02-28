@@ -18,6 +18,7 @@ from app.models.cluster import Cluster, ClusterEvent
 from app.models.event import Event
 from app.models.scoring_config import ProjectScoringConfig
 from app.services.demo import _ai_client, _parse_json
+import app.services.sources as sources  # registers all plugins on import
 
 _EMBEDDING_MODEL = "text-embedding-3-small"
 _EMBEDDING_DIMS = 1536
@@ -127,78 +128,25 @@ async def _detect_regression(
         return parent
     return None
 
-# Stripe event types that represent normal positive activity — not problems.
-# These are excluded from clustering so the engine focuses on issues.
-_POSITIVE_STRIPE_TYPES = frozenset({
-    "payment_intent.succeeded",
-    "payment_intent.created",
-    "charge.succeeded",
-    "charge.updated",
-    "checkout.session.completed",
-    "customer.created",
-    "customer.updated",
-    "customer.subscription.created",
-    # customer.subscription.updated intentionally excluded — status determines signal:
-    # canceled/past_due/incomplete are negative; only active/trialing are positive.
-    # The _POSITIVE_STRIPE_STATUSES check handles that distinction.
-    "invoice.created",
-    "invoice.finalized",
-    "invoice.sent",
-    "invoice.paid",
-    "invoice.payment_succeeded",
-    "payment_method.attached",
-    "setup_intent.succeeded",
-    "setup_intent.created",
-})
-
-# Pre-formatted for SQL IN () — safe because this is a hardcoded constant, not user input.
-_POSITIVE_STRIPE_SQL = ", ".join(f"'{t}'" for t in sorted(_POSITIVE_STRIPE_TYPES))
+# Stripe positive-event constants — sourced from the Stripe plugin so there is
+# a single source of truth used by both the Python filter and the SQL filter.
+from app.services.sources.stripe import POSITIVE_SQL as _POSITIVE_STRIPE_SQL
+from app.services.sources.stripe import POSITIVE_TYPES as _POSITIVE_STRIPE_TYPES
 
 
 def _summarize_event(event: Event, cross_channel: bool = True) -> str:
     """Produce a compact text summary of an event for LLM context.
 
-    cross_channel=True  — include customer/user identifiers so the LLM can
-                          group events that affect the same person across sources.
-    cross_channel=False — strip all identity fields; group purely by technical
-                          pattern (event type, error class, frustration type).
+    Dispatches to the registered SourcePlugin for the event's source.
+    Falls back to a generic summary for unrecognised sources so that new
+    sources work correctly the moment their plugin is registered, and even
+    before a plugin exists they won't be silently dropped.
     """
-    p = event.payload
-    if event.source == "stripe":
-        obj = p.get("data", {}).get("object", {})
-        status = obj.get("status", "unknown")
-        if cross_channel:
-            cus = obj.get("customer", p.get("customer", "unknown"))
-            amount = obj.get("amount", obj.get("amount_due", 0))
-            return f"{event.event_type} | customer:{cus} | amount:{amount} | status:{status}"
-        return f"{event.event_type} | status:{status}"
-
-    elif event.source == "sentry":
-        data = p.get("data", {})
-        evt = data.get("event", {})
-        exc_values = evt.get("exception", {}).get("values", [{}])
-        exc_type = exc_values[0].get("type", "unknown") if exc_values else "unknown"
-        level = data.get("issue", {}).get("level", evt.get("level", "error"))
-        if cross_channel:
-            user_email = evt.get("user", {}).get("email", "unknown")
-            return f"{event.event_type} | error:{exc_type} | user:{user_email} | level:{level}"
-        return f"{event.event_type} | error:{exc_type} | level:{level}"
-
-    else:  # fullstory
-        data = p.get("data", {})
-        frustration = data.get("frustration_type", "none")
-        if cross_channel:
-            page_url = data.get("page_url", "unknown")
-            user_email = data.get("user_email", "unknown")
-            return f"{event.event_type} | frustration:{frustration} | page:{page_url} | user:{user_email}"
-        # Strip URL to just the path pattern (drop query strings and IDs)
-        page_url = data.get("page_url", "")
-        try:
-            from urllib.parse import urlparse
-            path = urlparse(page_url).path
-        except Exception:
-            path = "unknown"
-        return f"{event.event_type} | frustration:{frustration} | path:{path}"
+    plugin = sources.get(event.source)
+    if plugin:
+        return plugin.summarize(event, cross_channel)
+    # Generic fallback for unknown sources
+    return f"{event.source}:{event.event_type}"
 
 
 async def _assign_or_create(
@@ -259,118 +207,28 @@ Respond only with JSON."""
 
 
 def _ux_signal(event: Event) -> float:
-    """Return a 0–1 UX impact score for a single event."""
-    if event.source == "fullstory":
-        frustration = event.payload.get("data", {}).get("frustration_type", "")
-        return {
-            "rage_click": 1.0,
-            "error_click": 0.85,
-            "dead_click": 0.7,
-            "thrash": 0.6,
-        }.get(frustration, 0.3)
-    elif event.source == "sentry":
-        data = event.payload.get("data", {})
-        level = data.get("issue", {}).get("level", data.get("event", {}).get("level", "error"))
-        return {"error": 0.8, "warning": 0.4, "info": 0.1}.get(level, 0.5)
-    return 0.3
-
-
-_POSITIVE_STRIPE_STATUSES = frozenset({
-    "paid", "succeeded", "active", "trialing", "complete",
-})
+    """Return a 0–1 UX impact score for a single event via the source plugin."""
+    plugin = sources.get(event.source)
+    return plugin.ux_signal(event) if plugin else 0.3
 
 
 def _is_negative_signal(event: Event) -> bool:
     """Return True only for events that represent a problem or user friction.
 
-    Positive signals (successful payments, routine activity, info logs) are
-    excluded from clustering — the engine focuses on issues that need attention.
+    Dispatches to the registered SourcePlugin.  Unknown sources default to
+    True (cluster everything) so new sources surface in the UI immediately.
     """
-    if event.source == "stripe":
-        if event.event_type in _POSITIVE_STRIPE_TYPES:
-            return False
-        # Guard against demo events where the LLM picks a negative event_type
-        # but fills the payload with a success status — both must agree.
-        obj = event.payload.get("data", {}).get("object", {})
-        status = obj.get("status", "")
-        if status in _POSITIVE_STRIPE_STATUSES:
-            return False
-        return True
-    elif event.source == "sentry":
-        # Resolved issues are positive outcomes — exclude them
-        if event.event_type in ("issue.resolved", "issue.ignored"):
-            return False
-        action = event.payload.get("action", "")
-        if action in ("resolved", "ignored"):
-            return False
-        data = event.payload.get("data", {})
-        level = data.get("issue", {}).get("level", data.get("event", {}).get("level", "error"))
-        return level not in ("info", "unknown")
-    else:  # fullstory
-        # Session lifecycle events are never frustration signals
-        if event.event_type in ("session_start", "session_end", "session_url_changed"):
-            return False
-        frustration = (event.payload.get("data", {}).get("frustration_type") or "").lower()
-        return frustration not in ("", "none")
+    plugin = sources.get(event.source)
+    return plugin.is_negative(event) if plugin else True
 
 
 def _rich_event_line(e: Event) -> str:
     """Build a detailed, source-specific event description for LLM insight generation."""
-    p = e.payload
-    parts = [e.event_type]
-
-    if e.source == "stripe":
-        obj = p.get("data", {}).get("object", {})
-        status = obj.get("status", "")
-        amount = obj.get("amount", obj.get("amount_due", 0))
-        failure_msg = obj.get("failure_message", obj.get("description", ""))
-        if status:
-            parts.append(f"status={status}")
-        if amount:
-            parts.append(f"${amount / 100:.2f}")
-        if failure_msg:
-            parts.append(f'reason="{failure_msg}"')
-
-    elif e.source == "sentry":
-        data = p.get("data", {})
-        evt = data.get("event", {})
-        exc_values = evt.get("exception", {}).get("values", [{}])
-        exc = exc_values[0] if exc_values else {}
-        exc_type = exc.get("type", "")
-        exc_value = exc.get("value", "")
-        issue_title = data.get("issue", {}).get("title", "")
-        culprit = evt.get("culprit", "")
-        req_url = evt.get("request", {}).get("url", "")
-        level = data.get("issue", {}).get("level", evt.get("level", ""))
-        if exc_type:
-            parts.append(f"error={exc_type}")
-        if exc_value and len(exc_value) < 100:
-            parts.append(f'msg="{exc_value}"')
-        if issue_title and issue_title != exc_type:
-            parts.append(f'title="{issue_title}"')
-        if culprit:
-            parts.append(f"culprit={culprit}")
-        if req_url:
-            parts.append(f"url={req_url}")
-        if level and level not in ("error", ""):
-            parts.append(f"level={level}")
-
-    else:  # fullstory
-        data = p.get("data", {})
-        frustration = data.get("frustration_type", "")
-        page_url = data.get("page_url", "")
-        target_text = data.get("target_text", "") or data.get("element", {}).get("text", "")
-        tag_name = data.get("element", {}).get("tag_name", "")
-        if frustration:
-            parts.append(f"type={frustration}")
-        if page_url:
-            parts.append(f"page={page_url}")
-        if target_text:
-            parts.append(f'element="{target_text}"')
-        if tag_name:
-            parts.append(f"tag={tag_name}")
-
-    return "  - " + " | ".join(parts)
+    plugin = sources.get(e.source)
+    if plugin:
+        return plugin.rich_line(e)
+    # Generic fallback for unknown sources
+    return f"  - {e.source}:{e.event_type}"
 
 
 async def _regenerate_insight(

@@ -9,7 +9,7 @@ import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { apiClient } from "@/lib/api";
 
-interface GithubConfig {
+export interface GithubConfig {
   project_id: string;
   repo: string | null;
   has_token: boolean;
@@ -21,9 +21,11 @@ interface GithubConfig {
 export default function GitHubConfig({
   slug,
   initialConfig,
+  onConfigSaved,
 }: {
   slug: string;
   initialConfig: GithubConfig;
+  onConfigSaved?: (config: GithubConfig) => void;
 }) {
   const [config, setConfig] = useState(initialConfig);
   const [repo, setRepo] = useState(initialConfig.repo ?? "");
@@ -54,6 +56,7 @@ export default function GitHubConfig({
       setWebhookSecret("");
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
+      onConfigSaved?.(updated);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save");
     } finally {

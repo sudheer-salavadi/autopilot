@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { apiClient } from "@/lib/api";
 import IntegrationConfig from "@/components/IntegrationConfig";
 import IntegrationPreview from "@/components/IntegrationPreview";
+import GitHubConfig, { type GithubConfig } from "@/components/GitHubConfig";
 
 export interface Integration {
   id: string;
@@ -27,6 +28,15 @@ export interface Project {
   name: string;
   slug: string;
 }
+
+const DEFAULT_GITHUB_CONFIG: GithubConfig = {
+  project_id: "",
+  repo: null,
+  has_token: false,
+  has_webhook_secret: false,
+  autopilot_enabled: false,
+  autopilot_min_score: 0.7,
+};
 
 type CatalogEntry = {
   type: string;
@@ -63,15 +73,16 @@ const CATALOG: { group: string; items: CatalogEntry[] }[] = [
         type: "github",
         label: "GitHub",
         icon: <IconBrandGithub className="size-5" />,
-        disabled: true,
       },
     ],
   },
 ];
 
-function StatusDot({ simulating, integration }: { simulating: boolean; integration?: Integration }) {
+function StatusDot({ simulating, integration, connected }: { simulating: boolean; integration?: Integration; connected?: boolean }) {
   if (simulating)
     return <IconCircleFilled className="size-1.5 text-blue-500 shrink-0 animate-pulse" />;
+  if (connected)
+    return <IconCircleFilled className="size-1.5 text-emerald-500 shrink-0" />;
   if (!integration)
     return <IconCircleFilled className="size-1.5 text-muted-foreground/40 shrink-0" />;
   if (integration.is_active)
@@ -79,8 +90,9 @@ function StatusDot({ simulating, integration }: { simulating: boolean; integrati
   return <IconCircleFilled className="size-1.5 text-amber-400 shrink-0" />;
 }
 
-function statusLabel(simulating: boolean, integration?: Integration) {
+function statusLabel(simulating: boolean, integration?: Integration, connected?: boolean) {
   if (simulating) return "Simulating";
+  if (connected !== undefined) return connected ? "Connected" : "Not configured";
   if (!integration) return "Not configured";
   return integration.is_active ? "Active" : "Inactive";
 }
@@ -89,14 +101,19 @@ export default function IntegrationsPanel({
   project,
   initialIntegrations,
   initialSimulatingTypes = [],
+  initialGithubConfig,
 }: {
   project: Project;
   initialIntegrations: Integration[];
   initialSimulatingTypes?: string[];
+  initialGithubConfig?: GithubConfig;
 }) {
   const [integrations, setIntegrations] = useState(initialIntegrations);
   const [selectedType, setSelectedType] = useState<string | null>(null);
   const [simulatingTypes, setSimulatingTypes] = useState<Set<string>>(new Set(initialSimulatingTypes));
+  const [githubConnected, setGithubConnected] = useState(
+    !!(initialGithubConfig?.has_token && initialGithubConfig?.repo)
+  );
   const api = apiClient();
 
   const configuredMap = new Map(integrations.map((i) => [i.type, i]));
@@ -148,6 +165,7 @@ export default function IntegrationsPanel({
               const configured = configuredMap.get(item.type);
               const isSelected = selectedType === item.type;
               const simulating = simulatingTypes.has(item.type);
+              const isGithub = item.type === "github";
               return (
                 <button
                   key={item.type}
@@ -167,9 +185,19 @@ export default function IntegrationsPanel({
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium truncate">{item.label}</p>
                     <div className="flex items-center gap-1.5 mt-0.5">
-                      <StatusDot simulating={simulating} integration={configured} />
+                      <StatusDot
+                        simulating={simulating}
+                        integration={isGithub ? undefined : configured}
+                        connected={isGithub ? githubConnected : undefined}
+                      />
                       <span className="text-[11px] text-muted-foreground">
-                        {item.disabled ? "Coming soon" : statusLabel(simulating, configured)}
+                        {item.disabled
+                          ? "Coming soon"
+                          : statusLabel(
+                              simulating,
+                              isGithub ? undefined : configured,
+                              isGithub ? githubConnected : undefined
+                            )}
                       </span>
                     </div>
                   </div>
@@ -192,6 +220,22 @@ export default function IntegrationsPanel({
         .filter((item) => !item.disabled)
         .map((item) => {
           const isVisible = selectedType === item.type;
+          if (item.type === "github") {
+            return (
+              <div
+                key="github"
+                className={cn("flex-1 overflow-y-auto p-6", !isVisible && "hidden")}
+              >
+                <GitHubConfig
+                  slug={project.slug}
+                  initialConfig={initialGithubConfig ?? DEFAULT_GITHUB_CONFIG}
+                  onConfigSaved={(cfg) =>
+                    setGithubConnected(!!(cfg.has_token && cfg.repo))
+                  }
+                />
+              </div>
+            );
+          }
           return (
             <div key={item.type} className={cn("contents", !isVisible && "hidden")}>
               <IntegrationConfig

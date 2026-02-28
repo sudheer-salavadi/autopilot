@@ -9,7 +9,6 @@ const TABS = [
   { label: "Team", segment: "team" },
   { label: "Billing", segment: "billing" },
   { label: "Prioritization", segment: "prioritization" },
-  { label: "GitHub", segment: "github" },
 ];
 
 export function SettingsTabs({ slug }: { slug: string }) {

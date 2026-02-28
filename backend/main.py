@@ -11,13 +11,45 @@ from app.config import settings
 from app.db.session import AsyncSessionLocal
 from app.services.demo import simulate_active_projects
 from app.services.evaluator import evaluate_all_projects
+from app.services.outbox import cleanup_old_jobs, process_next_job
 
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    async def background_outbox_worker():
+        """Fast-path outbox poller: drains evaluation_jobs as quickly as possible.
+
+        When the queue is empty the loop backs off to a 5-second sleep so it
+        doesn't busy-wait.  Each processed job triggers exactly one call to
+        evaluate_project.  Cleanup of old done/failed jobs runs every 200 jobs.
+        """
+        cleanup_counter = 0
+        while True:
+            try:
+                async with AsyncSessionLocal() as db:
+                    processed = await process_next_job(db)
+            except Exception:
+                processed = False
+
+            if not processed:
+                await asyncio.sleep(5)
+                continue
+
+            cleanup_counter += 1
+            if cleanup_counter >= 200:
+                cleanup_counter = 0
+                try:
+                    async with AsyncSessionLocal() as db:
+                        await cleanup_old_jobs(db)
+                except Exception:
+                    pass
+
     async def background_evaluator():
+        """Safety-net: catch any events that slipped through the outbox (e.g.
+        jobs lost during a crash window before the outbox was introduced, or
+        events inserted without going through a webhook handler)."""
         while True:
             try:
                 async with AsyncSessionLocal() as db:
@@ -35,10 +67,11 @@ async def lifespan(app: FastAPI):
                 pass
             await asyncio.sleep(3)
 
+    outbox_task    = asyncio.create_task(background_outbox_worker())
     evaluator_task = asyncio.create_task(background_evaluator())
     simulator_task = asyncio.create_task(background_simulator())
     yield
-    for task in (evaluator_task, simulator_task):
+    for task in (outbox_task, evaluator_task, simulator_task):
         task.cancel()
         try:
             await task
