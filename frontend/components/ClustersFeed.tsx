@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { IconBrandGithub, IconExternalLink, IconRefresh, IconX } from "@tabler/icons-react";
-import { type Cluster, type ClusterEvent, type ClustersPage, useClusters } from "@/lib/hooks/useClusters";
+import { IconBrandGithub, IconExternalLink, IconFilter, IconRefresh, IconX } from "@tabler/icons-react";
+import { type Cluster, type ClusterEvent, type ClustersPage, type ClustersParams, useClusters } from "@/lib/hooks/useClusters";
 import { apiClient } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -668,6 +668,15 @@ function useIsXl() {
   return isXl;
 }
 
+// ── source filter pill ────────────────────────────────────────────────────────
+
+const SOURCES = [
+  { value: "", label: "All" },
+  { value: "stripe", label: "Stripe" },
+  { value: "sentry", label: "Sentry" },
+  { value: "fullstory", label: "FullStory" },
+] as const;
+
 // ── main feed ────────────────────────────────────────────────────────────────
 
 export default function ClustersFeed({
@@ -679,7 +688,20 @@ export default function ClustersFeed({
   initialData?: ClustersPage | null;
   initialCrossChannel?: boolean;
 }) {
-  const { data, loading, error, refetch } = useClusters(slug, initialData);
+  // ── view / filter state ───────────────────────────────────────────────────
+  const [view, setView]             = useState<"active" | "resolved">("active");
+  const [filterSource, setSource]   = useState("");
+  const [minScore, setMinScore]     = useState(0);
+  const [showFilters, setShowFilters] = useState(false);
+
+  const params: ClustersParams = {
+    view,
+    source: filterSource || undefined,
+    min_score: minScore > 0 ? minScore : undefined,
+  };
+
+  const { data, loading, error, refetch } = useClusters(slug, initialData, params);
+
   const [evaluating, setEvaluating]         = useState(false);
   const [selected, setSelected]             = useState<Set<string>>(new Set());
   const [activeCluster, setActiveCluster]   = useState<Cluster | null>(null);
@@ -688,12 +710,14 @@ export default function ClustersFeed({
   const isXl = useIsXl();
   const api = apiClient();
 
+  // Reset selection when view/filters change
+  useEffect(() => { setSelected(new Set()); setActiveCluster(null); }, [view, filterSource, minScore]);
+
   // Apply optimistic updates to a cluster (e.g. after filing a GitHub issue)
   function handleClusterUpdated(id: string, patch: Partial<Cluster>) {
     if (activeCluster?.id === id) {
       setActiveCluster((c) => c ? { ...c, ...patch } : c);
     }
-    // When a cluster is resolved it drops off the active list — refetch
     if (patch.status === "resolved") {
       setActiveCluster(null);
       refetch();
@@ -701,13 +725,12 @@ export default function ClustersFeed({
   }
 
   const clusters = data?.items ?? [];
-  const allSelected     = clusters.length > 0 && selected.size === clusters.length;
-  const someSelected    = selected.size > 0 && !allSelected;
+  const allSelected = clusters.length > 0 && selected.size === clusters.length;
+  const someSelected = selected.size > 0 && !allSelected;
 
   function toggleAll(checked: boolean) {
     setSelected(checked ? new Set(clusters.map((c) => c.id)) : new Set());
   }
-
   function toggleOne(id: string) {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -721,9 +744,7 @@ export default function ClustersFeed({
     try {
       await api.post(`/api/projects/${slug}/clusters/evaluate`);
       await refetch();
-    } catch {
-      // silently ignore
-    } finally {
+    } catch { /* silently ignore */ } finally {
       setEvaluating(false);
     }
   }
@@ -733,157 +754,253 @@ export default function ClustersFeed({
     try {
       await api.put(`/api/projects/${slug}/scoring-config`, { cross_channel: next });
       setCrossChannel(next);
-      // re-evaluate so new events are clustered with the new mode
       await api.post(`/api/projects/${slug}/clusters/evaluate`);
       await refetch();
-    } catch {
-      // silently ignore
-    } finally {
+    } catch { /* silently ignore */ } finally {
       setTogglingMode(false);
     }
   }
 
+  const hasActiveFilters = filterSource !== "" || minScore > 0;
+
   return (
     <div className="flex items-start gap-4">
-      {/* left column — toolbar + table */}
+      {/* left column */}
       <div className="flex-1 min-w-0 space-y-3">
-      {/* toolbar */}
-      <div className="flex items-center justify-between gap-4">
-        <p className="text-sm text-muted-foreground">
-          {data ? `${data.total} cluster${data.total !== 1 ? "s" : ""}` : ""}
-          {selected.size > 0 && (
-            <span className="ml-2 text-foreground font-medium">· {selected.size} selected</span>
-          )}
-        </p>
 
-        <div className="flex items-center gap-4">
-          {/* cross-channel toggle */}
-          <div className="flex items-center gap-2">
-            <Switch
-              id="cross-channel"
-              checked={crossChannel}
-              onCheckedChange={handleToggleCrossChannel}
-              disabled={togglingMode}
-            />
-            <label
-              htmlFor="cross-channel"
-              className="text-sm cursor-pointer select-none"
+        {/* ── Tab bar: Active / Resolved ─────────────────────────────── */}
+        <div className="flex gap-1 border-b">
+          {(["active", "resolved"] as const).map((v) => (
+            <button
+              key={v}
+              onClick={() => setView(v)}
+              className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px capitalize ${
+                view === v
+                  ? "border-foreground text-foreground"
+                  : "border-transparent text-muted-foreground hover:text-foreground"
+              }`}
             >
-              {crossChannel ? (
-                <span>
-                  Cross-channel correlation{" "}
-                  <span className="text-muted-foreground font-normal">on</span>
-                </span>
-              ) : (
-                <span>
-                  Pattern-only clustering{" "}
-                  <span className="text-muted-foreground font-normal">on</span>
+              {v === "active" ? "Active" : "Resolved"}
+              {data && view === v && (
+                <span className="ml-1.5 text-[11px] text-muted-foreground font-mono">
+                  ({data.total})
                 </span>
               )}
-            </label>
-          </div>
-
-          <Button size="sm" variant="outline" onClick={handleEvaluate} disabled={evaluating || togglingMode} className="gap-2">
-            <IconRefresh className={`size-4 ${evaluating ? "animate-spin" : ""}`} />
-            Evaluate now
-          </Button>
-        </div>
-      </div>
-
-      {/* loading */}
-      {loading && (
-        <div className="rounded-lg border overflow-hidden">
-          {[1, 2, 3, 4].map((i) => (
-            <div key={i} className="h-12 border-b last:border-b-0 bg-muted/30 animate-pulse" />
+            </button>
           ))}
         </div>
-      )}
 
-      {/* error */}
-      {error && (
-        <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
-          {error}
-        </div>
-      )}
-
-      {/* empty */}
-      {!loading && !error && clusters.length === 0 && (
-        <div className="rounded-lg border border-dashed p-8 text-center">
+        {/* ── Toolbar ────────────────────────────────────────────────── */}
+        <div className="flex items-center justify-between gap-4 flex-wrap">
           <p className="text-sm text-muted-foreground">
-            No clusters yet. Click &ldquo;Evaluate now&rdquo; to group your events.
+            {data ? `${data.total} cluster${data.total !== 1 ? "s" : ""}` : ""}
+            {selected.size > 0 && (
+              <span className="ml-2 text-foreground font-medium">· {selected.size} selected</span>
+            )}
           </p>
-        </div>
-      )}
 
-      {/* table */}
-      {!loading && clusters.length > 0 && (
-        <div className="rounded-lg border overflow-hidden">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b bg-muted/40">
-                <th className="w-10 px-3 py-2.5">
-                  <IndeterminateCheckbox
-                    checked={allSelected}
-                    indeterminate={someSelected}
-                    onChange={toggleAll}
-                  />
-                </th>
-                <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground w-24">Priority</th>
-                <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground">Issue</th>
-                <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground w-20">Events</th>
-                <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground w-20">Users</th>
-                <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground w-28">Last seen</th>
-                <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground w-28">Status</th>
-                <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground w-10"></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y">
-              {clusters.map((cluster) => (
-                <tr
-                  key={cluster.id}
-                  onClick={() => setActiveCluster(cluster)}
-                  className={`cursor-pointer transition-colors ${
-                    activeCluster?.id === cluster.id
-                      ? "bg-muted/50"
-                      : "hover:bg-muted/30"
+          <div className="flex items-center gap-3">
+            {view === "active" && (
+              <>
+                {/* filter toggle */}
+                <button
+                  onClick={() => setShowFilters((v) => !v)}
+                  className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-md border transition-colors ${
+                    showFilters || hasActiveFilters
+                      ? "border-foreground/40 bg-muted text-foreground"
+                      : "border-border text-muted-foreground hover:text-foreground"
                   }`}
                 >
-                  <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
-                    <input
-                      type="checkbox"
-                      checked={selected.has(cluster.id)}
-                      onChange={() => toggleOne(cluster.id)}
-                      className="h-4 w-4 rounded border-border accent-foreground cursor-pointer"
-                    />
-                  </td>
-                  <td className="px-3 py-3">{priorityBadge(cluster.priority_score)}</td>
-                  <td className="px-3 py-3 max-w-0">
-                    <p className="font-medium truncate">{cluster.title}</p>
-                    <p className="text-xs text-muted-foreground truncate mt-0.5">{cluster.root_cause}</p>
-                  </td>
-                  <td className="px-3 py-3 text-muted-foreground tabular-nums">{cluster.event_count}</td>
-                  <td className="px-3 py-3 text-muted-foreground tabular-nums">{cluster.affected_users}</td>
-                  <td className="px-3 py-3 text-muted-foreground">{timeAgo(cluster.last_seen)}</td>
-                  <td className="px-3 py-3">{statusBadge(cluster.status)}</td>
-                  <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
-                    {cluster.github_issue_number && (
-                      <a
-                        href={cluster.github_issue_url ?? "#"}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        title={`GitHub #${cluster.github_issue_number}`}
-                        className="text-muted-foreground hover:text-foreground transition-colors"
-                      >
-                        <IconBrandGithub className="size-4" />
-                      </a>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                  <IconFilter className="size-3.5" />
+                  Filters
+                  {hasActiveFilters && (
+                    <span className="ml-0.5 rounded-full bg-foreground text-background text-[10px] px-1 leading-4">
+                      {(filterSource ? 1 : 0) + (minScore > 0 ? 1 : 0)}
+                    </span>
+                  )}
+                </button>
+
+                {/* cross-channel toggle */}
+                <div className="flex items-center gap-2">
+                  <Switch
+                    id="cross-channel"
+                    checked={crossChannel}
+                    onCheckedChange={handleToggleCrossChannel}
+                    disabled={togglingMode}
+                  />
+                  <label htmlFor="cross-channel" className="text-sm cursor-pointer select-none">
+                    {crossChannel
+                      ? <span>Cross-channel <span className="text-muted-foreground font-normal">on</span></span>
+                      : <span>Pattern-only <span className="text-muted-foreground font-normal">on</span></span>
+                    }
+                  </label>
+                </div>
+
+                <Button size="sm" variant="outline" onClick={handleEvaluate} disabled={evaluating || togglingMode} className="gap-2">
+                  <IconRefresh className={`size-4 ${evaluating ? "animate-spin" : ""}`} />
+                  Evaluate now
+                </Button>
+              </>
+            )}
+          </div>
         </div>
-      )}
+
+        {/* ── Filter bar (active view only) ──────────────────────────── */}
+        {view === "active" && showFilters && (
+          <div className="rounded-lg border bg-muted/20 px-4 py-3 space-y-3">
+            {/* Source pills */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs text-muted-foreground w-16 shrink-0">Source</span>
+              <div className="flex gap-1.5 flex-wrap">
+                {SOURCES.map(({ value, label }) => (
+                  <button
+                    key={value}
+                    onClick={() => setSource(value)}
+                    className={`px-2.5 py-1 text-xs rounded-full border transition-colors ${
+                      filterSource === value
+                        ? "border-foreground bg-foreground text-background"
+                        : "border-border text-muted-foreground hover:text-foreground hover:border-foreground/40"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Min score slider */}
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-muted-foreground w-16 shrink-0">Min score</span>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={minScore}
+                onChange={(e) => setMinScore(parseFloat(e.target.value))}
+                className="flex-1 accent-foreground"
+              />
+              <span className="text-xs font-mono w-8 text-right">
+                {minScore > 0 ? (minScore * 10).toFixed(1) : "off"}
+              </span>
+              {minScore > 0 && (
+                <button onClick={() => setMinScore(0)} className="text-[11px] text-muted-foreground hover:text-foreground transition-colors">
+                  Reset
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* loading */}
+        {loading && (
+          <div className="rounded-lg border overflow-hidden">
+            {[1, 2, 3, 4].map((i) => (
+              <div key={i} className="h-12 border-b last:border-b-0 bg-muted/30 animate-pulse" />
+            ))}
+          </div>
+        )}
+
+        {/* error */}
+        {error && (
+          <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+            {error}
+          </div>
+        )}
+
+        {/* empty */}
+        {!loading && !error && clusters.length === 0 && (
+          <div className="rounded-lg border border-dashed p-8 text-center">
+            <p className="text-sm text-muted-foreground">
+              {view === "resolved"
+                ? "No resolved clusters yet."
+                : hasActiveFilters
+                  ? "No clusters match the current filters."
+                  : "No active clusters. Click \"Evaluate now\" to group your events."}
+            </p>
+            {view === "resolved" && (
+              <p className="text-xs text-muted-foreground mt-1">
+                Resolved clusters will appear here once you close issues.
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* table */}
+        {!loading && clusters.length > 0 && (
+          <div className="rounded-lg border overflow-hidden">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b bg-muted/40">
+                  {view === "active" && (
+                    <th className="w-10 px-3 py-2.5">
+                      <IndeterminateCheckbox
+                        checked={allSelected}
+                        indeterminate={someSelected}
+                        onChange={toggleAll}
+                      />
+                    </th>
+                  )}
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground w-24">Priority</th>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground">Issue</th>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground w-20">Events</th>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground w-20">Users</th>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground w-28">
+                    {view === "resolved" ? "Resolved" : "Last seen"}
+                  </th>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground w-28">Status</th>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground w-10"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {clusters.map((cluster) => (
+                  <tr
+                    key={cluster.id}
+                    onClick={() => setActiveCluster(cluster)}
+                    className={`cursor-pointer transition-colors ${
+                      activeCluster?.id === cluster.id ? "bg-muted/50" : "hover:bg-muted/30"
+                    }`}
+                  >
+                    {view === "active" && (
+                      <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={selected.has(cluster.id)}
+                          onChange={() => toggleOne(cluster.id)}
+                          className="h-4 w-4 rounded border-border accent-foreground cursor-pointer"
+                        />
+                      </td>
+                    )}
+                    <td className="px-3 py-3">{priorityBadge(cluster.priority_score)}</td>
+                    <td className="px-3 py-3 max-w-0">
+                      <p className="font-medium truncate">{cluster.title}</p>
+                      <p className="text-xs text-muted-foreground truncate mt-0.5">{cluster.root_cause}</p>
+                    </td>
+                    <td className="px-3 py-3 text-muted-foreground tabular-nums">{cluster.event_count}</td>
+                    <td className="px-3 py-3 text-muted-foreground tabular-nums">{cluster.affected_users}</td>
+                    <td className="px-3 py-3 text-muted-foreground">
+                      {view === "resolved" ? timeAgo(cluster.updated_at) : timeAgo(cluster.last_seen)}
+                    </td>
+                    <td className="px-3 py-3">{statusBadge(cluster.status)}</td>
+                    <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                      {cluster.github_issue_number && (
+                        <a
+                          href={cluster.github_issue_url ?? "#"}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title={`GitHub #${cluster.github_issue_number}`}
+                          className="text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                          <IconBrandGithub className="size-4" />
+                        </a>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
 
       </div>{/* end left column */}
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { apiClient } from "@/lib/api";
 
 export interface ClusterEvent {
@@ -42,7 +42,28 @@ export interface ClustersPage {
   page_size: number;
 }
 
-export function useClusters(slug: string, initialData?: ClustersPage | null) {
+export interface ClustersParams {
+  view?: "active" | "resolved";
+  source?: string;       // "stripe" | "sentry" | "fullstory" | ""
+  min_score?: number;    // 0.0–1.0; omitted when 0
+}
+
+function buildQs(params: ClustersParams): string {
+  const q = new URLSearchParams();
+  if (params.view && params.view !== "active") q.set("view", params.view);
+  if (params.source) q.set("source", params.source);
+  if (params.min_score && params.min_score > 0) q.set("min_score", String(params.min_score));
+  const s = q.toString();
+  return s ? `?${s}` : "";
+}
+
+export function useClusters(
+  slug: string,
+  initialData?: ClustersPage | null,
+  params: ClustersParams = {},
+) {
+  const qs = buildQs(params);
+
   const [data, setData] = useState<ClustersPage | null>(initialData ?? null);
   const [loading, setLoading] = useState(!initialData);
   const [error, setError] = useState<string | null>(null);
@@ -53,20 +74,26 @@ export function useClusters(slug: string, initialData?: ClustersPage | null) {
     setLoading(true);
     setError(null);
     try {
-      const result = await api.get<ClustersPage>(`/api/projects/${slug}/clusters`);
+      const result = await api.get<ClustersPage>(`/api/projects/${slug}/clusters${qs}`);
       setData(result);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load clusters");
     } finally {
       setLoading(false);
     }
-  }, [slug]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [slug, qs]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Skip the very first effect invocation when SSR initialData covers the
+  // default view (qs = ""). Any subsequent change to fetchClusters (slug or
+  // params change) triggers a fresh fetch.
+  const skipInitial = useRef(!!initialData && qs === "");
   useEffect(() => {
-    if (!initialData) {
-      fetchClusters();
+    if (skipInitial.current) {
+      skipInitial.current = false;
+      return;
     }
-  }, [fetchClusters, initialData]);
+    fetchClusters();
+  }, [fetchClusters]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return { data, loading, error, refetch: fetchClusters };
 }

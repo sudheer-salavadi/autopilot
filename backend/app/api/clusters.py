@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,6 +24,11 @@ router = APIRouter(prefix="/api/projects/{slug}", tags=["clusters"])
 async def list_clusters(
     page: int = 1,
     page_size: int = 20,
+    # "active" (default) = open + investigating; "resolved" = resolved only
+    view: str = Query(default="active", pattern="^(active|resolved)$"),
+    # Optional filters
+    source: str | None = Query(default=None),
+    min_score: float | None = Query(default=None, ge=0.0, le=1.0),
     deps=Depends(require_project_member),
     db: AsyncSession = Depends(get_db),
 ):
@@ -31,20 +36,40 @@ async def list_clusters(
 
     offset = (page - 1) * page_size
 
-    active_filter = Cluster.status.in_(["open", "investigating"])
+    # Base status filter
+    if view == "resolved":
+        status_filter = Cluster.status == ClusterStatus.resolved
+    else:
+        status_filter = Cluster.status.in_([ClusterStatus.open, ClusterStatus.investigating])
+
+    filters = [Cluster.project_id == project.id, status_filter]
+
+    # Optional: filter clusters that contain at least one event from the given source
+    if source:
+        source_subq = (
+            select(ClusterEvent.cluster_id)
+            .join(Event, Event.id == ClusterEvent.event_id)
+            .where(Event.source == source)
+        )
+        filters.append(Cluster.id.in_(source_subq))
+
+    # Optional: minimum priority score
+    if min_score is not None:
+        filters.append(Cluster.priority_score >= min_score)
 
     count_result = await db.execute(
-        select(func.count()).select_from(Cluster).where(
-            Cluster.project_id == project.id, active_filter
-        )
+        select(func.count()).select_from(Cluster).where(*filters)
     )
     total = count_result.scalar_one()
 
+    # Active clusters sort by score DESC; resolved by most-recently-resolved first
+    order = Cluster.updated_at.desc() if view == "resolved" else Cluster.priority_score.desc()
+
     result = await db.execute(
         select(Cluster)
-        .where(Cluster.project_id == project.id, active_filter)
+        .where(*filters)
         .options(selectinload(Cluster.cluster_events))
-        .order_by(Cluster.priority_score.desc())
+        .order_by(order)
         .offset(offset)
         .limit(page_size)
     )

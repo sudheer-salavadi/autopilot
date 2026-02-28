@@ -47,6 +47,49 @@ async def _generate_embedding(text_input: str) -> list[float] | None:
         return None
 
 
+def _cosine_sim(a: list[float], b: list[float]) -> float:
+    """Cosine similarity between two equal-length float vectors (no numpy needed)."""
+    dot = sum(x * y for x, y in zip(a, b))
+    mag_a = sum(x * x for x in a) ** 0.5
+    mag_b = sum(x * x for x in b) ** 0.5
+    if mag_a == 0.0 or mag_b == 0.0:
+        return 0.0
+    return dot / (mag_a * mag_b)
+
+
+def _candidate_clusters(
+    event_embedding: list[float] | None,
+    open_clusters: list[Cluster],
+    top_k: int = 5,
+) -> list[Cluster]:
+    """Return the top-K open clusters most semantically similar to the event.
+
+    Pre-filters the candidate list the LLM receives, reducing token usage and
+    keeping context focused on plausible matches. Falls back to the first top_k
+    clusters (by recency) when embeddings are unavailable.
+    """
+    if event_embedding is None or not open_clusters:
+        return open_clusters[:top_k]
+
+    scored: list[tuple[float, Cluster]] = []
+    unembedded: list[Cluster] = []
+
+    for c in open_clusters:
+        if c.embedding is not None:
+            sim = _cosine_sim(event_embedding, list(c.embedding))
+            scored.append((sim, c))
+        else:
+            unembedded.append(c)
+
+    if not scored:
+        # No clusters have embeddings yet — fall back to recency order
+        return open_clusters[:top_k]
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    candidates = [c for _, c in scored[:top_k]]
+    return candidates
+
+
 async def _detect_regression(
     new_cluster: Cluster, db: AsyncSession
 ) -> Cluster | None:
@@ -581,9 +624,14 @@ async def evaluate_project(project_id: uuid.UUID, db: AsyncSession) -> dict:
 
         summary = _summarize_event(event, cross_channel=cross_channel)
 
+        # Pre-filter candidate clusters using vector similarity so the LLM
+        # only sees the most relevant context (reduces tokens, improves accuracy).
+        event_embedding = await _generate_embedding(summary)
+        candidates = _candidate_clusters(event_embedding, open_clusters)
+
         try:
             decision = await _assign_or_create(
-                summary, open_clusters, client, model, is_local, cross_channel=cross_channel
+                summary, candidates, client, model, is_local, cross_channel=cross_channel
             )
         except Exception:
             # On LLM failure, create a new cluster rather than dropping the event
