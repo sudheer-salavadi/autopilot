@@ -1,7 +1,10 @@
 import { apiServer } from "@/lib/api-server";
-import { Separator } from "@/components/ui/separator";
 import ClustersFeed from "@/components/ClustersFeed";
 import type { ClustersPage } from "@/lib/hooks/useClusters";
+
+interface ScoringConfig {
+  cross_channel: boolean;
+}
 
 export default async function ClustersPage({
   params,
@@ -11,11 +14,12 @@ export default async function ClustersPage({
   const { slug } = await params;
 
   let initialData: ClustersPage | null = null;
-  try {
-    initialData = await apiServer<ClustersPage>(`/api/projects/${slug}/clusters`);
-  } catch {
-    // render client-side if SSR fails
-  }
+  let initialConfig: ScoringConfig = { cross_channel: true };
+
+  await Promise.allSettled([
+    apiServer<ClustersPage>(`/api/projects/${slug}/clusters`).then((d) => { initialData = d; }),
+    apiServer<ScoringConfig>(`/api/projects/${slug}/scoring-config`).then((c) => { initialConfig = c; }),
+  ]);
 
   return (
     <>
@@ -26,8 +30,7 @@ export default async function ClustersPage({
         </p>
       </div>
 
-
-      <ClustersFeed slug={slug} initialData={initialData} />
+      <ClustersFeed slug={slug} initialData={initialData} initialCrossChannel={initialConfig.cross_channel} />
     </>
   );
 }

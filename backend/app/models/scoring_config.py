@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Float, ForeignKey, Integer
+from sqlalchemy import Boolean, Float, ForeignKey, Integer
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -18,6 +18,7 @@ class ProjectScoringConfig(Base):
     weight_ux: Mapped[float] = mapped_column(Float, nullable=False, default=0.2)
     max_revenue_usd: Mapped[float] = mapped_column(Float, nullable=False, default=10000.0)
     max_frequency_count: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
+    cross_channel: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     # Relationships
     project: Mapped["Project"] = relationship("Project", back_populates="scoring_config")  # noqa: F821

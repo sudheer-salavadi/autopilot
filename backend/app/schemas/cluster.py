@@ -1,9 +1,20 @@
 import uuid
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel
 
 from app.models.cluster import ClusterStatus
+
+
+class ClusterEventOut(BaseModel):
+    id: uuid.UUID
+    source: str
+    event_type: str
+    received_at: datetime
+    payload: dict[str, Any]
+
+    model_config = {"from_attributes": True}
 
 
 class ClusterOut(BaseModel):
@@ -23,6 +34,7 @@ class ClusterOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     event_ids: list[uuid.UUID] = []
+    event_payloads: list[ClusterEventOut] | None = None
 
     model_config = {"from_attributes": True}
 

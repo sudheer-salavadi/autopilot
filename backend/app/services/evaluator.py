@@ -7,7 +7,7 @@ using a weighted formula: Score = Revenue*w1 + Frequency*w2 + UX*w3
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -17,30 +17,75 @@ from app.models.event import Event
 from app.models.scoring_config import ProjectScoringConfig
 from app.services.demo import _ai_client, _parse_json
 
+# Stripe event types that represent normal positive activity — not problems.
+# These are excluded from clustering so the engine focuses on issues.
+_POSITIVE_STRIPE_TYPES = frozenset({
+    "payment_intent.succeeded",
+    "payment_intent.created",
+    "charge.succeeded",
+    "charge.updated",
+    "checkout.session.completed",
+    "customer.created",
+    "customer.updated",
+    "customer.subscription.created",
+    "customer.subscription.updated",
+    "invoice.created",
+    "invoice.finalized",
+    "invoice.sent",
+    "invoice.payment_succeeded",
+    "payment_method.attached",
+    "setup_intent.succeeded",
+    "setup_intent.created",
+})
 
-def _summarize_event(event: Event) -> str:
-    """Produce a compact text summary of an event for LLM context."""
+# Pre-formatted for SQL IN () — safe because this is a hardcoded constant, not user input.
+_POSITIVE_STRIPE_SQL = ", ".join(f"'{t}'" for t in sorted(_POSITIVE_STRIPE_TYPES))
+
+
+def _summarize_event(event: Event, cross_channel: bool = True) -> str:
+    """Produce a compact text summary of an event for LLM context.
+
+    cross_channel=True  — include customer/user identifiers so the LLM can
+                          group events that affect the same person across sources.
+    cross_channel=False — strip all identity fields; group purely by technical
+                          pattern (event type, error class, frustration type).
+    """
     p = event.payload
     if event.source == "stripe":
         obj = p.get("data", {}).get("object", {})
-        cus = obj.get("customer", p.get("customer", "unknown"))
-        amount = obj.get("amount", obj.get("amount_due", 0))
         status = obj.get("status", "unknown")
-        return f"{event.event_type} | customer:{cus} | amount:{amount} | status:{status}"
+        if cross_channel:
+            cus = obj.get("customer", p.get("customer", "unknown"))
+            amount = obj.get("amount", obj.get("amount_due", 0))
+            return f"{event.event_type} | customer:{cus} | amount:{amount} | status:{status}"
+        return f"{event.event_type} | status:{status}"
+
     elif event.source == "sentry":
         data = p.get("data", {})
         evt = data.get("event", {})
         exc_values = evt.get("exception", {}).get("values", [{}])
         exc_type = exc_values[0].get("type", "unknown") if exc_values else "unknown"
-        user_email = evt.get("user", {}).get("email", "unknown")
         level = data.get("issue", {}).get("level", evt.get("level", "error"))
-        return f"{event.event_type} | error:{exc_type} | user:{user_email} | level:{level}"
+        if cross_channel:
+            user_email = evt.get("user", {}).get("email", "unknown")
+            return f"{event.event_type} | error:{exc_type} | user:{user_email} | level:{level}"
+        return f"{event.event_type} | error:{exc_type} | level:{level}"
+
     else:  # fullstory
         data = p.get("data", {})
         frustration = data.get("frustration_type", "none")
-        page_url = data.get("page_url", "unknown")
-        user_email = data.get("user_email", "unknown")
-        return f"{event.event_type} | frustration:{frustration} | page:{page_url} | user:{user_email}"
+        if cross_channel:
+            page_url = data.get("page_url", "unknown")
+            user_email = data.get("user_email", "unknown")
+            return f"{event.event_type} | frustration:{frustration} | page:{page_url} | user:{user_email}"
+        # Strip URL to just the path pattern (drop query strings and IDs)
+        page_url = data.get("page_url", "")
+        try:
+            from urllib.parse import urlparse
+            path = urlparse(page_url).path
+        except Exception:
+            path = "unknown"
+        return f"{event.event_type} | frustration:{frustration} | path:{path}"
 
 
 async def _assign_or_create(
@@ -49,6 +94,7 @@ async def _assign_or_create(
     client,
     model: str,
     is_local: bool,
+    cross_channel: bool = True,
 ) -> dict:
     """Ask the LLM to assign this event to an existing cluster or create a new one."""
     cluster_summaries = [
@@ -56,6 +102,22 @@ async def _assign_or_create(
         for c in open_clusters
     ]
     clusters_text = "\n".join(cluster_summaries) if cluster_summaries else "(none)"
+
+    if cross_channel:
+        system_prompt = (
+            "You assign events to issue clusters based on shared root cause. "
+            "Events from different sources (Stripe, Sentry, FullStory) may belong "
+            "to the same cluster when they affect the same customers or stem from "
+            "the same underlying problem. Respond only with JSON."
+        )
+    else:
+        system_prompt = (
+            "You assign events to clusters based on technical pattern only. "
+            "Ignore customer or user identifiers entirely. "
+            "Group events by their type, error class, or behavior pattern — "
+            "a cluster represents a recurring technical issue, not a customer journey. "
+            "Respond only with JSON."
+        )
 
     user_msg = f"""Open clusters:
 {clusters_text}
@@ -74,7 +136,7 @@ Respond only with JSON."""
     response = await client.chat.completions.create(
         model=model,
         messages=[
-            {"role": "system", "content": "You assign events to issue clusters. Respond only with JSON."},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_msg},
         ],
         temperature=0.1,
@@ -98,6 +160,23 @@ def _ux_signal(event: Event) -> float:
         level = data.get("issue", {}).get("level", data.get("event", {}).get("level", "error"))
         return {"error": 0.8, "warning": 0.4, "info": 0.1}.get(level, 0.5)
     return 0.3
+
+
+def _is_negative_signal(event: Event) -> bool:
+    """Return True only for events that represent a problem or user friction.
+
+    Positive signals (successful payments, routine activity, info logs) are
+    excluded from clustering — the engine focuses on issues that need attention.
+    """
+    if event.source == "stripe":
+        return event.event_type not in _POSITIVE_STRIPE_TYPES
+    elif event.source == "sentry":
+        data = event.payload.get("data", {})
+        level = data.get("issue", {}).get("level", data.get("event", {}).get("level", "error"))
+        return level != "info"
+    else:  # fullstory
+        frustration = (event.payload.get("data", {}).get("frustration_type") or "").lower()
+        return frustration not in ("", "none")
 
 
 def _rescore_cluster(cluster: Cluster, config: ProjectScoringConfig, events: list[Event]) -> None:
@@ -134,6 +213,33 @@ async def evaluate_project(project_id: uuid.UUID, db: AsyncSession) -> dict:
     Cluster unclustered events for a project and rescore all affected clusters.
     Returns stats: {"clustered": N, "clusters_created": M, "clusters_updated": K}
     """
+    # 0. Purge open clusters that consist entirely of positive-signal events.
+    #    These are artifacts from before the negative-signal filter was applied.
+    #    Marking them resolved removes them from the active view without losing the data.
+    await db.execute(
+        text(f"""
+            UPDATE clusters
+               SET status = 'resolved', updated_at = NOW()
+             WHERE project_id = :project_id
+               AND status = 'open'
+               AND id IN (SELECT DISTINCT cluster_id FROM cluster_events)
+               AND id NOT IN (
+                   SELECT DISTINCT ce.cluster_id
+                     FROM cluster_events ce
+                     JOIN events e ON e.id = ce.event_id
+                    WHERE NOT (
+                        (e.source = 'stripe'    AND e.event_type IN ({_POSITIVE_STRIPE_SQL}))
+                     OR (e.source = 'sentry'    AND COALESCE(e.payload #>> '{{data,issue,level}}',
+                                                              e.payload #>> '{{data,event,level}}',
+                                                              'error') = 'info')
+                     OR (e.source = 'fullstory' AND COALESCE(e.payload #>> '{{data,frustration_type}}',
+                                                              'none') IN ('', 'none'))
+                    )
+               )
+        """),
+        {"project_id": str(project_id)},
+    )
+
     # 1. Load or create scoring config
     result = await db.execute(
         select(ProjectScoringConfig).where(ProjectScoringConfig.project_id == project_id)
@@ -144,13 +250,29 @@ async def evaluate_project(project_id: uuid.UUID, db: AsyncSession) -> dict:
         db.add(config)
         await db.flush()
 
-    # 2. Fetch unclustered events via LEFT JOIN — events with no ClusterEvent row
+    # 2. Fetch unclustered NEGATIVE-signal events via LEFT JOIN.
+    #    Positive events are excluded at the SQL level so they never fill the
+    #    batch and block negative events from being processed.
     result = await db.execute(
         select(Event)
         .outerjoin(ClusterEvent, ClusterEvent.event_id == Event.id)
         .where(
             Event.project_id == project_id,
             ClusterEvent.event_id.is_(None),
+            # Exclude positive Stripe event types (successes, routine activity)
+            ~((Event.source == "stripe") & Event.event_type.in_(_POSITIVE_STRIPE_TYPES)),
+            # Exclude Sentry info-level events (non-actionable)
+            text(
+                "NOT (events.source = 'sentry' AND "
+                "COALESCE(events.payload #>> '{data,issue,level}', "
+                "         events.payload #>> '{data,event,level}', 'error') = 'info')"
+            ),
+            # Exclude FullStory events with no frustration signal
+            text(
+                "NOT (events.source = 'fullstory' AND "
+                "COALESCE(events.payload #>> '{data,frustration_type}', 'none') "
+                "IN ('', 'none'))"
+            ),
         )
         .order_by(Event.received_at.asc())
         .limit(50)
@@ -174,16 +296,23 @@ async def evaluate_project(project_id: uuid.UUID, db: AsyncSession) -> dict:
     open_clusters = result.scalars().all()
 
     client, model, is_local = _ai_client()
+    cross_channel: bool = config.cross_channel
 
     clusters_created = 0
     clusters_updated_ids: set[uuid.UUID] = set()
 
-    # 4. Process each unclustered event
+    # 4. Process each unclustered event (Python safety-filter in case any
+    #    positive signal slips through the SQL filter due to unexpected payload shape)
     for event in unclustered:
-        summary = _summarize_event(event)
+        if not _is_negative_signal(event):
+            continue
+
+        summary = _summarize_event(event, cross_channel=cross_channel)
 
         try:
-            decision = await _assign_or_create(summary, open_clusters, client, model, is_local)
+            decision = await _assign_or_create(
+                summary, open_clusters, client, model, is_local, cross_channel=cross_channel
+            )
         except Exception:
             # On LLM failure, create a new cluster rather than dropping the event
             decision = {

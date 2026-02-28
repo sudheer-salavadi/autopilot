@@ -3,6 +3,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiClient } from "@/lib/api";
 
+export interface ClusterEvent {
+  id: string;
+  source: string;
+  event_type: string;
+  received_at: string;
+  payload: Record<string, unknown>;
+}
+
 export interface Cluster {
   id: string;
   project_id: string;
@@ -20,6 +28,7 @@ export interface Cluster {
   created_at: string;
   updated_at: string;
   event_ids: string[];
+  event_payloads?: ClusterEvent[];
 }
 
 export interface ClustersPage {

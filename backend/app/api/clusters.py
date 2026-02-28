@@ -8,7 +8,8 @@ from sqlalchemy.orm import selectinload
 from app.api.deps import require_project_member, require_project_owner
 from app.db.session import get_db
 from app.models.cluster import Cluster, ClusterEvent
-from app.schemas.cluster import ClusterOut, ClustersPage
+from app.models.event import Event
+from app.schemas.cluster import ClusterEventOut, ClusterOut, ClustersPage
 from app.services.evaluator import evaluate_project
 
 router = APIRouter(prefix="/api/projects/{slug}", tags=["clusters"])
@@ -25,14 +26,18 @@ async def list_clusters(
 
     offset = (page - 1) * page_size
 
+    active_filter = Cluster.status.in_(["open", "investigating"])
+
     count_result = await db.execute(
-        select(func.count()).select_from(Cluster).where(Cluster.project_id == project.id)
+        select(func.count()).select_from(Cluster).where(
+            Cluster.project_id == project.id, active_filter
+        )
     )
     total = count_result.scalar_one()
 
     result = await db.execute(
         select(Cluster)
-        .where(Cluster.project_id == project.id)
+        .where(Cluster.project_id == project.id, active_filter)
         .options(selectinload(Cluster.cluster_events))
         .order_by(Cluster.priority_score.desc())
         .offset(offset)
@@ -67,8 +72,18 @@ async def get_cluster(
         from fastapi import HTTPException, status
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cluster not found")
 
+    events_result = await db.execute(
+        select(Event)
+        .join(ClusterEvent, ClusterEvent.event_id == Event.id)
+        .where(ClusterEvent.cluster_id == cluster_id)
+        .order_by(Event.received_at.desc())
+        .limit(20)
+    )
+    events = events_result.scalars().all()
+
     out = ClusterOut.model_validate(cluster)
     out.event_ids = [ce.event_id for ce in cluster.cluster_events]
+    out.event_payloads = [ClusterEventOut.model_validate(e) for e in events]
     return out
 
 

@@ -10,6 +10,7 @@ class ScoringConfigOut(BaseModel):
     weight_ux: float
     max_revenue_usd: float
     max_frequency_count: int
+    cross_channel: bool
 
     model_config = {"from_attributes": True}
 
@@ -20,6 +21,7 @@ class ScoringConfigUpdate(BaseModel):
     weight_ux: float | None = None
     max_revenue_usd: float | None = None
     max_frequency_count: int | None = None
+    cross_channel: bool | None = None
 
     @field_validator("weight_revenue", "weight_frequency", "weight_ux", mode="before")
     @classmethod

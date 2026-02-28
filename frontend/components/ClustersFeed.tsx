@@ -2,10 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import { IconRefresh } from "@tabler/icons-react";
-import { type Cluster, type ClustersPage, useClusters } from "@/lib/hooks/useClusters";
+import { type Cluster, type ClusterEvent, type ClustersPage, useClusters } from "@/lib/hooks/useClusters";
 import { apiClient } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import {
   Sheet,
   SheetContent,
@@ -91,10 +92,51 @@ function IndeterminateCheckbox({
   );
 }
 
+// ── source icon ───────────────────────────────────────────────────────────────
+
+function SourceIcon({ source }: { source: string }) {
+  const known = ["stripe", "sentry", "fullstory"];
+  if (!known.includes(source)) return null;
+  return (
+    <img
+      src={`/integrations-icns/${source}.svg`}
+      alt={source}
+      title={source}
+      className="size-4 shrink-0"
+    />
+  );
+}
+
 // ── detail sheet ─────────────────────────────────────────────────────────────
 
-function ClusterSheet({ cluster, open, onClose }: { cluster: Cluster | null; open: boolean; onClose: () => void }) {
-  const [tab, setTab] = useState<"overview" | "raw">("overview");
+function ClusterSheet({
+  cluster, open, onClose, slug,
+}: {
+  cluster: Cluster | null;
+  open: boolean;
+  onClose: () => void;
+  slug: string;
+}) {
+  const [tab, setTab]                         = useState<"overview" | "raw">("overview");
+  const [payloads, setPayloads]               = useState<ClusterEvent[] | null>(null);
+  const [payloadsLoading, setPayloadsLoading] = useState(false);
+  const api = apiClient();
+
+  // Reset when a different cluster is opened
+  useEffect(() => {
+    setTab("overview");
+    setPayloads(null);
+  }, [cluster?.id]);
+
+  // Lazy-fetch event payloads the first time Raw tab is opened
+  useEffect(() => {
+    if (tab !== "raw" || payloads !== null || !cluster) return;
+    setPayloadsLoading(true);
+    api.get<Cluster>(`/api/projects/${slug}/clusters/${cluster.id}`)
+      .then((d) => setPayloads(d.event_payloads ?? []))
+      .catch(() => setPayloads([]))
+      .finally(() => setPayloadsLoading(false));
+  }, [tab, cluster?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!cluster) return null;
 
@@ -103,7 +145,7 @@ function ClusterSheet({ cluster, open, onClose }: { cluster: Cluster | null; ope
 
   return (
     <Sheet open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
-      <SheetContent side="right" className="sm:max-w-lg w-full overflow-y-auto flex flex-col gap-0">
+      <SheetContent side="right" className="sm:max-w-xl w-full overflow-y-auto flex flex-col gap-0">
         <SheetHeader className="pb-0">
           <div className="flex items-center gap-2 flex-wrap">
             {priorityBadge(cluster.priority_score)}
@@ -179,7 +221,37 @@ function ClusterSheet({ cluster, open, onClose }: { cluster: Cluster | null; ope
 
         {/* raw / technical */}
         {tab === "raw" && (
-          <div className="p-4 space-y-4 flex-1">
+          <div className="p-4 space-y-5 flex-1 min-h-0">
+
+            {/* Event payloads — the primary content */}
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                Event payloads considered ({cluster.event_count} total
+                {cluster.event_count > 20 ? ", showing most recent 20" : ""})
+              </p>
+
+              {payloadsLoading && (
+                <div className="space-y-2">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="rounded-md border h-24 bg-muted/30 animate-pulse" />
+                  ))}
+                </div>
+              )}
+
+              {!payloadsLoading && payloads && payloads.length === 0 && (
+                <p className="text-xs text-muted-foreground">No event payloads found.</p>
+              )}
+
+              {!payloadsLoading && payloads && payloads.length > 0 && (
+                <div className="space-y-2">
+                  {payloads.map((ev) => (
+                    <EventPayloadBlock key={ev.id} event={ev} />
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Score breakdown — secondary */}
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Score breakdown</p>
               <div className="rounded-md border divide-y font-mono text-xs">
@@ -203,37 +275,34 @@ function ClusterSheet({ cluster, open, onClose }: { cluster: Cluster | null; ope
               </p>
             </div>
 
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Cluster metadata</p>
-              <div className="rounded-md border divide-y font-mono text-xs">
-                {[
-                  { label: "cluster_id", value: cluster.id },
-                  { label: "status",     value: cluster.status },
-                  { label: "first_seen", value: new Date(cluster.first_seen).toISOString() },
-                  { label: "last_seen",  value: new Date(cluster.last_seen).toISOString() },
-                ].map(({ label, value }) => (
-                  <div key={label} className="flex items-start justify-between gap-4 px-3 py-2">
-                    <span className="text-muted-foreground shrink-0">{label}</span>
-                    <span className="text-right break-all">{value}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">
-                Event IDs ({cluster.event_ids.length})
-              </p>
-              <div className="rounded-md border font-mono text-xs max-h-48 overflow-y-auto divide-y">
-                {cluster.event_ids.map((id) => (
-                  <div key={id} className="px-3 py-1.5 text-muted-foreground">{id}</div>
-                ))}
-              </div>
-            </div>
           </div>
         )}
       </SheetContent>
     </Sheet>
+  );
+}
+
+// ── collapsible event payload block ──────────────────────────────────────────
+
+function EventPayloadBlock({ event }: { event: ClusterEvent }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div className="rounded-md border overflow-hidden">
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        className="w-full flex items-center gap-2 px-3 py-2 text-xs text-left hover:bg-muted/40 transition-colors"
+      >
+        <SourceIcon source={event.source} />
+        <span className="font-mono font-medium flex-1 truncate">{event.event_type}</span>
+        <span className="text-muted-foreground shrink-0">{timeAgo(event.received_at)}</span>
+        <span className="text-muted-foreground ml-1">{expanded ? "▲" : "▼"}</span>
+      </button>
+      {expanded && (
+        <pre className="px-3 py-2 text-[11px] font-mono bg-muted/30 border-t overflow-x-auto whitespace-pre-wrap break-all leading-relaxed">
+          {JSON.stringify(event.payload, null, 2)}
+        </pre>
+      )}
+    </div>
   );
 }
 
@@ -242,14 +311,18 @@ function ClusterSheet({ cluster, open, onClose }: { cluster: Cluster | null; ope
 export default function ClustersFeed({
   slug,
   initialData,
+  initialCrossChannel = true,
 }: {
   slug: string;
   initialData?: ClustersPage | null;
+  initialCrossChannel?: boolean;
 }) {
   const { data, loading, error, refetch } = useClusters(slug, initialData);
   const [evaluating, setEvaluating]         = useState(false);
   const [selected, setSelected]             = useState<Set<string>>(new Set());
   const [activeCluster, setActiveCluster]   = useState<Cluster | null>(null);
+  const [crossChannel, setCrossChannel]     = useState(initialCrossChannel);
+  const [togglingMode, setTogglingMode]     = useState(false);
   const api = apiClient();
 
   const clusters = data?.items ?? [];
@@ -280,20 +353,64 @@ export default function ClustersFeed({
     }
   }
 
+  async function handleToggleCrossChannel(next: boolean) {
+    setTogglingMode(true);
+    try {
+      await api.put(`/api/projects/${slug}/scoring-config`, { cross_channel: next });
+      setCrossChannel(next);
+      // re-evaluate so new events are clustered with the new mode
+      await api.post(`/api/projects/${slug}/clusters/evaluate`);
+      await refetch();
+    } catch {
+      // silently ignore
+    } finally {
+      setTogglingMode(false);
+    }
+  }
+
   return (
     <div className="space-y-3">
       {/* toolbar */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-4">
         <p className="text-sm text-muted-foreground">
           {data ? `${data.total} cluster${data.total !== 1 ? "s" : ""}` : ""}
           {selected.size > 0 && (
             <span className="ml-2 text-foreground font-medium">· {selected.size} selected</span>
           )}
         </p>
-        <Button size="sm" variant="outline" onClick={handleEvaluate} disabled={evaluating} className="gap-2">
-          <IconRefresh className={`size-4 ${evaluating ? "animate-spin" : ""}`} />
-          Evaluate now
-        </Button>
+
+        <div className="flex items-center gap-4">
+          {/* cross-channel toggle */}
+          <div className="flex items-center gap-2">
+            <Switch
+              id="cross-channel"
+              checked={crossChannel}
+              onCheckedChange={handleToggleCrossChannel}
+              disabled={togglingMode}
+            />
+            <label
+              htmlFor="cross-channel"
+              className="text-sm cursor-pointer select-none"
+            >
+              {crossChannel ? (
+                <span>
+                  Cross-channel correlation{" "}
+                  <span className="text-muted-foreground font-normal">on</span>
+                </span>
+              ) : (
+                <span>
+                  Pattern-only clustering{" "}
+                  <span className="text-muted-foreground font-normal">on</span>
+                </span>
+              )}
+            </label>
+          </div>
+
+          <Button size="sm" variant="outline" onClick={handleEvaluate} disabled={evaluating || togglingMode} className="gap-2">
+            <IconRefresh className={`size-4 ${evaluating ? "animate-spin" : ""}`} />
+            Evaluate now
+          </Button>
+        </div>
       </div>
 
       {/* loading */}
@@ -378,6 +495,7 @@ export default function ClustersFeed({
         cluster={activeCluster}
         open={activeCluster !== null}
         onClose={() => setActiveCluster(null)}
+        slug={slug}
       />
     </div>
   );
