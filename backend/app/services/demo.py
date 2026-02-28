@@ -1,11 +1,17 @@
+import asyncio
 import json
 import re
 import random
+import uuid
+from datetime import datetime, timezone
 from typing import Tuple
 
 from openai import AsyncOpenAI
+from sqlalchemy import or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.db.session import AsyncSessionLocal
 
 
 def _ai_client() -> Tuple[AsyncOpenAI, str, bool]:
@@ -163,3 +169,80 @@ Use realistic IDs. Timestamps within a 2-minute window.
     if isinstance(data, list):
         return data
     return data.get("events", [])
+
+
+async def _bg_evaluate(project_id: uuid.UUID) -> None:
+    """Run evaluate_project in a fresh session; safe as an asyncio background task."""
+    from app.services.evaluator import evaluate_project
+    try:
+        async with AsyncSessionLocal() as db:
+            await evaluate_project(project_id, db)
+    except Exception:
+        pass
+
+
+async def simulate_active_projects(db: AsyncSession) -> None:
+    """Generate one batch of demo events for every project that has simulation enabled."""
+    from app.models.event import Event
+    from app.models.project import Project
+    from app.models.scoring_config import ProjectScoringConfig
+
+    result = await db.execute(
+        select(ProjectScoringConfig, Project)
+        .join(Project, Project.id == ProjectScoringConfig.project_id)
+        .where(
+            or_(
+                ProjectScoringConfig.simulate_stripe.is_(True),
+                ProjectScoringConfig.simulate_sentry.is_(True),
+                ProjectScoringConfig.simulate_fullstory.is_(True),
+            )
+        )
+    )
+    rows = result.all()
+
+    for config, project in rows:
+        sources = (
+            (["stripe"]    if config.simulate_stripe    else []) +
+            (["sentry"]    if config.simulate_sentry    else []) +
+            (["fullstory"] if config.simulate_fullstory else [])
+        )
+
+        inserted_any = False
+        for source in sources:
+            other_sources = [s for s in ("stripe", "sentry", "fullstory") if s != source]
+            ctx_result = await db.execute(
+                select(Event)
+                .where(Event.project_id == project.id, Event.source.in_(other_sources))
+                .order_by(Event.received_at.desc())
+                .limit(3)
+            )
+            context = [
+                {"source": e.source, "event_type": e.event_type, "payload": e.payload}
+                for e in ctx_result.scalars().all()
+            ]
+
+            try:
+                events_data = await generate_demo_events(source=source, context_events=context or None)
+            except Exception:
+                continue
+
+            now = datetime.now(timezone.utc)
+            for e in events_data:
+                db.add(Event(
+                    id=uuid.uuid4(),
+                    project_id=project.id,
+                    integration_id=None,
+                    source=e.get("source", source),
+                    event_type=e.get("event_type", "demo.event"),
+                    payload=e.get("payload", {}),
+                    is_demo=True,
+                    received_at=now,
+                ))
+            inserted_any = True
+
+        if inserted_any:
+            try:
+                await db.commit()
+                asyncio.create_task(_bg_evaluate(project.id))
+            except Exception:
+                await db.rollback()

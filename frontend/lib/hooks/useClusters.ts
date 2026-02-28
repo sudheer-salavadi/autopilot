@@ -27,6 +27,10 @@ export interface Cluster {
   status: "open" | "investigating" | "resolved";
   created_at: string;
   updated_at: string;
+  parent_cluster_id: string | null;
+  regression_count: number;
+  github_issue_number: number | null;
+  github_issue_url: string | null;
   event_ids: string[];
   event_payloads?: ClusterEvent[];
 }

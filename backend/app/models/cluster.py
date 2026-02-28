@@ -2,6 +2,7 @@ import enum
 import uuid
 from datetime import datetime, timezone
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import DateTime, Enum, Float, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -45,6 +46,22 @@ class Cluster(Base):
     status: Mapped[ClusterStatus] = mapped_column(
         Enum(ClusterStatus), nullable=False, default=ClusterStatus.open
     )
+
+    # Semantic embedding (text-embedding-3-small, 1536 dims) for regression detection
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(1536), nullable=True)
+
+    # Regression tracking — parent_cluster_id links back to the original resolved cluster
+    parent_cluster_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("clusters.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    regression_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # GitHub issue filed for this cluster
+    github_issue_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    github_issue_url: Mapped[str | None] = mapped_column(String, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

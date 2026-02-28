@@ -7,15 +7,82 @@ using a weighted formula: Score = Revenue*w1 + Frequency*w2 + UX*w3
 import uuid
 from datetime import datetime, timezone
 
+from openai import AsyncOpenAI
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.config import settings
 from app.db.session import AsyncSessionLocal
 from app.models.cluster import Cluster, ClusterEvent
 from app.models.event import Event
 from app.models.scoring_config import ProjectScoringConfig
 from app.services.demo import _ai_client, _parse_json
+
+_EMBEDDING_MODEL = "text-embedding-3-small"
+_EMBEDDING_DIMS = 1536
+_REGRESSION_SIMILARITY_THRESHOLD = 0.92  # cosine similarity — tune as needed
+
+
+def _embedding_client() -> AsyncOpenAI | None:
+    """Always use OpenAI for embeddings (LM Studio may not support them).
+    Returns None if no API key is configured — embeddings are skipped gracefully.
+    """
+    if settings.OPENAI_API_KEY:
+        return AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+    return None
+
+
+async def _generate_embedding(text_input: str) -> list[float] | None:
+    """Generate a 1536-dim embedding for the given text. Returns None on any failure."""
+    client = _embedding_client()
+    if not client:
+        return None
+    try:
+        resp = await client.embeddings.create(
+            model=_EMBEDDING_MODEL, input=text_input
+        )
+        return resp.data[0].embedding
+    except Exception:
+        return None
+
+
+async def _detect_regression(
+    new_cluster: Cluster, db: AsyncSession
+) -> Cluster | None:
+    """Check whether a newly created cluster is a regression of a resolved one.
+
+    Uses pgvector cosine similarity on embeddings. Returns the best-matching
+    resolved cluster if similarity exceeds the threshold, else None.
+    """
+    if new_cluster.embedding is None:
+        return None
+
+    result = await db.execute(
+        text(
+            """
+            SELECT id, title, regression_count,
+                   1 - (embedding <=> CAST(:vec AS vector)) AS similarity
+              FROM clusters
+             WHERE project_id = :project_id
+               AND status     = 'resolved'
+               AND embedding  IS NOT NULL
+               AND id         != :new_id
+             ORDER BY embedding <=> CAST(:vec AS vector)
+             LIMIT 1
+            """
+        ),
+        {
+            "vec": str(new_cluster.embedding),
+            "project_id": str(new_cluster.project_id),
+            "new_id": str(new_cluster.id),
+        },
+    )
+    row = result.fetchone()
+    if row and row.similarity >= _REGRESSION_SIMILARITY_THRESHOLD:
+        parent = await db.get(Cluster, row.id)
+        return parent
+    return None
 
 # Stripe event types that represent normal positive activity — not problems.
 # These are excluded from clustering so the engine focuses on issues.
@@ -28,10 +95,13 @@ _POSITIVE_STRIPE_TYPES = frozenset({
     "customer.created",
     "customer.updated",
     "customer.subscription.created",
-    "customer.subscription.updated",
+    # customer.subscription.updated intentionally excluded — status determines signal:
+    # canceled/past_due/incomplete are negative; only active/trialing are positive.
+    # The _POSITIVE_STRIPE_STATUSES check handles that distinction.
     "invoice.created",
     "invoice.finalized",
     "invoice.sent",
+    "invoice.paid",
     "invoice.payment_succeeded",
     "payment_method.attached",
     "setup_intent.succeeded",
@@ -162,6 +232,11 @@ def _ux_signal(event: Event) -> float:
     return 0.3
 
 
+_POSITIVE_STRIPE_STATUSES = frozenset({
+    "paid", "succeeded", "active", "trialing", "complete",
+})
+
+
 def _is_negative_signal(event: Event) -> bool:
     """Return True only for events that represent a problem or user friction.
 
@@ -169,14 +244,192 @@ def _is_negative_signal(event: Event) -> bool:
     excluded from clustering — the engine focuses on issues that need attention.
     """
     if event.source == "stripe":
-        return event.event_type not in _POSITIVE_STRIPE_TYPES
+        if event.event_type in _POSITIVE_STRIPE_TYPES:
+            return False
+        # Guard against demo events where the LLM picks a negative event_type
+        # but fills the payload with a success status — both must agree.
+        obj = event.payload.get("data", {}).get("object", {})
+        status = obj.get("status", "")
+        if status in _POSITIVE_STRIPE_STATUSES:
+            return False
+        return True
     elif event.source == "sentry":
+        # Resolved issues are positive outcomes — exclude them
+        if event.event_type in ("issue.resolved", "issue.ignored"):
+            return False
+        action = event.payload.get("action", "")
+        if action in ("resolved", "ignored"):
+            return False
         data = event.payload.get("data", {})
         level = data.get("issue", {}).get("level", data.get("event", {}).get("level", "error"))
-        return level != "info"
+        return level not in ("info", "unknown")
     else:  # fullstory
+        # Session lifecycle events are never frustration signals
+        if event.event_type in ("session_start", "session_end", "session_url_changed"):
+            return False
         frustration = (event.payload.get("data", {}).get("frustration_type") or "").lower()
         return frustration not in ("", "none")
+
+
+def _rich_event_line(e: Event) -> str:
+    """Build a detailed, source-specific event description for LLM insight generation."""
+    p = e.payload
+    parts = [e.event_type]
+
+    if e.source == "stripe":
+        obj = p.get("data", {}).get("object", {})
+        status = obj.get("status", "")
+        amount = obj.get("amount", obj.get("amount_due", 0))
+        failure_msg = obj.get("failure_message", obj.get("description", ""))
+        if status:
+            parts.append(f"status={status}")
+        if amount:
+            parts.append(f"${amount / 100:.2f}")
+        if failure_msg:
+            parts.append(f'reason="{failure_msg}"')
+
+    elif e.source == "sentry":
+        data = p.get("data", {})
+        evt = data.get("event", {})
+        exc_values = evt.get("exception", {}).get("values", [{}])
+        exc = exc_values[0] if exc_values else {}
+        exc_type = exc.get("type", "")
+        exc_value = exc.get("value", "")
+        issue_title = data.get("issue", {}).get("title", "")
+        culprit = evt.get("culprit", "")
+        req_url = evt.get("request", {}).get("url", "")
+        level = data.get("issue", {}).get("level", evt.get("level", ""))
+        if exc_type:
+            parts.append(f"error={exc_type}")
+        if exc_value and len(exc_value) < 100:
+            parts.append(f'msg="{exc_value}"')
+        if issue_title and issue_title != exc_type:
+            parts.append(f'title="{issue_title}"')
+        if culprit:
+            parts.append(f"culprit={culprit}")
+        if req_url:
+            parts.append(f"url={req_url}")
+        if level and level not in ("error", ""):
+            parts.append(f"level={level}")
+
+    else:  # fullstory
+        data = p.get("data", {})
+        frustration = data.get("frustration_type", "")
+        page_url = data.get("page_url", "")
+        target_text = data.get("target_text", "") or data.get("element", {}).get("text", "")
+        tag_name = data.get("element", {}).get("tag_name", "")
+        if frustration:
+            parts.append(f"type={frustration}")
+        if page_url:
+            parts.append(f"page={page_url}")
+        if target_text:
+            parts.append(f'element="{target_text}"')
+        if tag_name:
+            parts.append(f"tag={tag_name}")
+
+    return "  - " + " | ".join(parts)
+
+
+async def _regenerate_insight(
+    cluster: Cluster,
+    events: list[Event],
+    client,
+    model: str,
+    is_local: bool,
+    cross_channel: bool = True,
+) -> None:
+    """Re-generate title and root_cause from the cluster's actual negative events.
+
+    Groups events by source and builds a rich, element/page-aware context so the
+    LLM can identify causal chains (e.g. backend errors → UI frustration) and
+    produce specific, actionable descriptions rather than generic summaries.
+    """
+    negative = [e for e in events if _is_negative_signal(e)]
+    if not negative:
+        return
+
+    # Group rich event lines by source
+    stripe_lines: list[str] = []
+    sentry_lines: list[str] = []
+    fullstory_lines: list[str] = []
+    for e in negative[:15]:
+        line = _rich_event_line(e)
+        if e.source == "stripe":
+            stripe_lines.append(line)
+        elif e.source == "sentry":
+            sentry_lines.append(line)
+        else:
+            fullstory_lines.append(line)
+
+    context_parts: list[str] = []
+    if stripe_lines:
+        context_parts.append("STRIPE events:\n" + "\n".join(stripe_lines))
+    if sentry_lines:
+        context_parts.append("SENTRY events:\n" + "\n".join(sentry_lines))
+    if fullstory_lines:
+        context_parts.append("FULLSTORY events:\n" + "\n".join(fullstory_lines))
+
+    events_text = "\n\n".join(context_parts)
+    sources_active = sum(1 for s in [stripe_lines, sentry_lines, fullstory_lines] if s)
+
+    cross_source_hint = ""
+    if sources_active > 1:
+        cross_source_hint = (
+            "\n\nNOTE: This cluster spans multiple data sources. "
+            "If Sentry backend errors correlate with FullStory user frustration, "
+            "describe the causal chain: what is broken at the backend level and how "
+            "that manifests as a degraded experience (e.g. dead clicks, rage clicks) "
+            "on a specific page or element. Name the page, the failing operation, "
+            "and the error type where the data supports it."
+        )
+
+    user_msg = f"""These events all belong to the same issue cluster:
+
+{events_text}
+
+Current title: {cluster.title!r}
+Current root cause: {cluster.root_cause!r}
+
+Generate an accurate title and one-sentence root cause based solely on the events above.
+- Be specific: reference the exact page, element name, error class, or operation if present.
+- Identify the root cause (backend error, payment failure, broken UI interaction).
+- Do NOT use vague language like "an issue occurred" or "some problem".
+- Do NOT describe successful or routine activity.{cross_source_hint}
+
+Respond only with JSON:
+{{"title":"<concise title, under 60 chars>","root_cause":"<one sentence — specific, names what broke and where>"}}"""
+
+    kwargs = {} if is_local else {"response_format": {"type": "json_object"}}
+    try:
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a software reliability engineer summarizing production incidents. "
+                        "Be specific and concise. Respond only with JSON."
+                    ),
+                },
+                {"role": "user", "content": user_msg},
+            ],
+            temperature=0.1,
+            **kwargs,
+        )
+        result = _parse_json(response.choices[0].message.content)
+        if result.get("title"):
+            cluster.title = result["title"][:200]
+        if result.get("root_cause"):
+            cluster.root_cause = result["root_cause"][:500]
+    except Exception:
+        pass  # Keep existing title/root_cause on LLM failure
+
+    # Generate embedding from the (possibly updated) title + root_cause.
+    # This runs regardless of whether the LLM call above succeeded, so clusters
+    # that kept their existing title still get an embedding on first pass.
+    embedding = await _generate_embedding(f"{cluster.title}. {cluster.root_cause}")
+    if embedding is not None:
+        cluster.embedding = embedding
 
 
 def _rescore_cluster(cluster: Cluster, config: ProjectScoringConfig, events: list[Event]) -> None:
@@ -228,12 +481,21 @@ async def evaluate_project(project_id: uuid.UUID, db: AsyncSession) -> dict:
                      FROM cluster_events ce
                      JOIN events e ON e.id = ce.event_id
                     WHERE NOT (
-                        (e.source = 'stripe'    AND e.event_type IN ({_POSITIVE_STRIPE_SQL}))
-                     OR (e.source = 'sentry'    AND COALESCE(e.payload #>> '{{data,issue,level}}',
-                                                              e.payload #>> '{{data,event,level}}',
-                                                              'error') = 'info')
-                     OR (e.source = 'fullstory' AND COALESCE(e.payload #>> '{{data,frustration_type}}',
-                                                              'none') IN ('', 'none'))
+                        (e.source = 'stripe'    AND (
+                                                       e.event_type IN ({_POSITIVE_STRIPE_SQL})
+                                                       OR e.payload #>> '{{data,object,status}}' IN ('paid','succeeded','active','trialing','complete')
+                                                     ))
+                     OR (e.source = 'sentry'    AND (
+                                                       COALESCE(e.payload #>> '{{data,issue,level}}',
+                                                                e.payload #>> '{{data,event,level}}',
+                                                                'error') IN ('info', 'unknown')
+                                                       OR e.event_type IN ('issue.resolved', 'issue.ignored')
+                                                       OR COALESCE(e.payload #>> '{{action}}', '') IN ('resolved', 'ignored')
+                                                     ))
+                     OR (e.source = 'fullstory' AND (
+                                                       COALESCE(e.payload #>> '{{data,frustration_type}}', 'none') IN ('', 'none')
+                                                       OR e.event_type IN ('session_start', 'session_end', 'session_url_changed')
+                                                     ))
                     )
                )
         """),
@@ -261,17 +523,27 @@ async def evaluate_project(project_id: uuid.UUID, db: AsyncSession) -> dict:
             ClusterEvent.event_id.is_(None),
             # Exclude positive Stripe event types (successes, routine activity)
             ~((Event.source == "stripe") & Event.event_type.in_(_POSITIVE_STRIPE_TYPES)),
-            # Exclude Sentry info-level events (non-actionable)
+            # Also exclude Stripe events where payload status is positive (catches event_type/status mismatches)
             text(
-                "NOT (events.source = 'sentry' AND "
-                "COALESCE(events.payload #>> '{data,issue,level}', "
-                "         events.payload #>> '{data,event,level}', 'error') = 'info')"
+                "NOT (events.source = 'stripe' AND "
+                "events.payload #>> '{data,object,status}' IN "
+                "('paid','succeeded','active','trialing','complete'))"
             ),
-            # Exclude FullStory events with no frustration signal
+            # Exclude Sentry non-actionable events (info/unknown level, resolved/ignored issues)
             text(
-                "NOT (events.source = 'fullstory' AND "
-                "COALESCE(events.payload #>> '{data,frustration_type}', 'none') "
-                "IN ('', 'none'))"
+                "NOT (events.source = 'sentry' AND ("
+                "  COALESCE(events.payload #>> '{data,issue,level}', "
+                "           events.payload #>> '{data,event,level}', 'error') IN ('info', 'unknown')"
+                "  OR events.event_type IN ('issue.resolved', 'issue.ignored')"
+                "  OR COALESCE(events.payload #>> '{action}', '') IN ('resolved', 'ignored')"
+                "))"
+            ),
+            # Exclude FullStory events with no frustration signal or session lifecycle events
+            text(
+                "NOT (events.source = 'fullstory' AND ("
+                "  COALESCE(events.payload #>> '{data,frustration_type}', 'none') IN ('', 'none')"
+                "  OR events.event_type IN ('session_start', 'session_end', 'session_url_changed')"
+                "))"
             ),
         )
         .order_by(Event.received_at.asc())
@@ -346,6 +618,20 @@ async def evaluate_project(project_id: uuid.UUID, db: AsyncSession) -> dict:
             )
             db.add(target)
             await db.flush()
+
+            # Check if this is a regression of a resolved cluster.
+            # We need an embedding first — generate a provisional one from the
+            # LLM-assigned title/root_cause so we can run similarity immediately.
+            provisional_embedding = await _generate_embedding(
+                f"{target.title}. {target.root_cause}"
+            )
+            if provisional_embedding is not None:
+                target.embedding = provisional_embedding
+                parent = await _detect_regression(target, db)
+                if parent is not None:
+                    target.parent_cluster_id = parent.id
+                    parent.regression_count += 1
+
             open_clusters.append(target)
             clusters_created += 1
 
@@ -391,13 +677,146 @@ async def evaluate_project(project_id: uuid.UUID, db: AsyncSession) -> dict:
 
         _rescore_cluster(cluster, config, cluster_events)
 
+        # Regenerate title/root_cause from the actual negative events so the
+        # description always matches the scores (e.g. a cluster seeded with a
+        # positive event but later filled with failures gets corrected here).
+        if cluster.event_count >= 2:
+            await _regenerate_insight(
+                cluster, cluster_events, client, model, is_local, cross_channel
+            )
+
     await db.commit()
+
+    # 6. Autopilot — auto-file GitHub issues for clusters that crossed the threshold.
+    #    Runs after commit so scores are final. Failures are non-blocking.
+    await _autopilot_github(project_id, clusters_updated_ids, db)
 
     return {
         "clustered": len(unclustered),
         "clusters_created": clusters_created,
         "clusters_updated": len(clusters_updated_ids) - clusters_created,
     }
+
+
+async def _autopilot_github(
+    project_id: uuid.UUID,
+    updated_cluster_ids: set[uuid.UUID],
+    db: AsyncSession,
+) -> None:
+    """Auto-create GitHub issues for clusters that exceed the autopilot threshold."""
+    from collections import Counter
+
+    from app.models.github_config import ProjectGithubConfig
+    from app.services import github as gh
+
+    # Load GitHub config — if not configured or autopilot off, nothing to do
+    gh_result = await db.execute(
+        select(ProjectGithubConfig).where(
+            ProjectGithubConfig.project_id == project_id
+        )
+    )
+    gh_config = gh_result.scalar_one_or_none()
+    if (
+        not gh_config
+        or not gh_config.autopilot_enabled
+        or not gh_config.token
+        or not gh_config.repo
+    ):
+        return
+
+    # Load the project slug for the issue body link
+    from app.models.project import Project
+    proj_result = await db.execute(
+        select(Project.slug).where(Project.id == project_id)
+    )
+    project_slug = proj_result.scalar_one_or_none() or ""
+
+    # Check each updated cluster against the threshold
+    for cluster_id in updated_cluster_ids:
+        result = await db.execute(select(Cluster).where(Cluster.id == cluster_id))
+        cluster = result.scalar_one_or_none()
+        if not cluster:
+            continue
+
+        # Skip if: already has an issue, below threshold, too few events, or resolved
+        if (
+            cluster.github_issue_number
+            or cluster.priority_score < gh_config.autopilot_min_score
+            or cluster.event_count < 3
+            or cluster.status.value == "resolved"
+        ):
+            continue
+
+        # Count events by source for the issue body
+        events_result = await db.execute(
+            select(Event.source)
+            .join(ClusterEvent, ClusterEvent.event_id == Event.id)
+            .where(ClusterEvent.cluster_id == cluster_id)
+        )
+        source_counts = dict(Counter(row[0] for row in events_result.all()))
+
+        # Regression context
+        is_regression = cluster.parent_cluster_id is not None
+        parent_title = parent_issue_number = parent_issue_url = None
+        if is_regression:
+            parent_result = await db.execute(
+                select(Cluster).where(Cluster.id == cluster.parent_cluster_id)
+            )
+            parent = parent_result.scalar_one_or_none()
+            if parent:
+                parent_title = parent.title
+                parent_issue_number = parent.github_issue_number
+                parent_issue_url = parent.github_issue_url
+
+                # If parent has a GitHub issue, reopen it instead of creating a new one
+                if parent.github_issue_number and parent.github_issue_url:
+                    try:
+                        comment = (
+                            f"⚠️ **Regression detected by Autopilot** — "
+                            f"{cluster.event_count} new events after this issue was closed.\n\n"
+                            f"[View cluster →]({settings.FRONTEND_URL}/projects/{project_slug}/clusters/{cluster.id})"
+                        )
+                        await gh.reopen_issue(
+                            token=gh_config.token,
+                            repo=gh_config.repo,
+                            issue_number=parent.github_issue_number,
+                            comment=comment,
+                        )
+                        # Link the regression cluster to the reopened issue
+                        cluster.github_issue_number = parent.github_issue_number
+                        cluster.github_issue_url = parent.github_issue_url
+                        await db.commit()
+                    except Exception:
+                        pass
+                    continue
+
+        body = gh.build_issue_body(
+            cluster=cluster,
+            project_slug=project_slug,
+            frontend_url=settings.FRONTEND_URL,
+            source_counts=source_counts,
+            is_regression=is_regression,
+            parent_title=parent_title,
+            parent_issue_number=parent_issue_number,
+            parent_issue_url=parent_issue_url,
+        )
+
+        try:
+            issue = await gh.create_issue(
+                token=gh_config.token,
+                repo=gh_config.repo,
+                title=f"[Autopilot] {cluster.title}",
+                body=body,
+                labels=["autopilot"],
+            )
+            cluster.github_issue_number = issue["number"]
+            cluster.github_issue_url = issue["html_url"]
+            from app.models.cluster import ClusterStatus
+            if cluster.status == ClusterStatus.open:
+                cluster.status = ClusterStatus.investigating
+            await db.commit()
+        except Exception:
+            pass  # Non-blocking — next evaluate cycle will retry
 
 
 async def evaluate_all_projects(db: AsyncSession) -> None:

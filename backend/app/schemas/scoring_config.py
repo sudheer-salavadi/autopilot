@@ -11,6 +11,9 @@ class ScoringConfigOut(BaseModel):
     max_revenue_usd: float
     max_frequency_count: int
     cross_channel: bool
+    simulate_stripe: bool
+    simulate_sentry: bool
+    simulate_fullstory: bool
 
     model_config = {"from_attributes": True}
 

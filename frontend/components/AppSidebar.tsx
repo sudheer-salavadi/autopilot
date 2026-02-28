@@ -157,27 +157,52 @@ export default function AppSidebar({
 
       <SidebarFooter>
         <SidebarMenu>
-          {user && (
-            <SidebarMenuItem>
-              <div className="flex flex-col px-2 py-1">
-                <span className="text-sm font-medium truncate">
-                  {user.name || user.email}
-                </span>
-                {user.name && (
-                  <span className="text-xs text-muted-foreground truncate">
-                    {user.email}
-                  </span>
-                )}
-              </div>
-            </SidebarMenuItem>
-          )}
           <SidebarMenuItem>
-            <SidebarMenuButton asChild>
-              <a href={`${API_URL}/api/auth/logout`}>
-                <IconLogout />
-                Sign out
-              </a>
-            </SidebarMenuButton>
+            {user ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <SidebarMenuButton className="h-10 gap-2.5">
+                    <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-[11px] font-semibold">
+                      {(user.name ?? user.email)
+                        .split(" ")
+                        .map((w) => w[0])
+                        .slice(0, 2)
+                        .join("")
+                        .toUpperCase()}
+                    </span>
+                    <span className="flex-1 truncate text-sm">
+                      {user.name || user.email}
+                    </span>
+                    <IconChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+                  </SidebarMenuButton>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent side="top" align="start" className="min-w-56">
+                  <div className="px-2 py-1.5 space-y-0.5">
+                    <p className="text-sm font-medium truncate">{user.name || user.email}</p>
+                    {user.name && (
+                      <p className="text-xs text-muted-foreground truncate">{user.email}</p>
+                    )}
+                    <p className="truncate font-mono text-[11px] text-muted-foreground/60">
+                      {user.id}
+                    </p>
+                  </div>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem asChild>
+                    <a href={`${API_URL}/api/auth/logout`} className="flex items-center gap-2">
+                      <IconLogout className="size-4" />
+                      Sign out
+                    </a>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : (
+              <SidebarMenuButton asChild>
+                <a href={`${API_URL}/api/auth/logout`}>
+                  <IconLogout />
+                  Sign out
+                </a>
+              </SidebarMenuButton>
+            )}
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>

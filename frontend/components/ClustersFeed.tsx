@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { IconRefresh } from "@tabler/icons-react";
+import { IconBrandGithub, IconExternalLink, IconRefresh, IconX } from "@tabler/icons-react";
 import { type Cluster, type ClusterEvent, type ClustersPage, useClusters } from "@/lib/hooks/useClusters";
 import { apiClient } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
@@ -10,9 +10,7 @@ import { Switch } from "@/components/ui/switch";
 import {
   Sheet,
   SheetContent,
-  SheetHeader,
   SheetTitle,
-  SheetDescription,
 } from "@/components/ui/sheet";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -107,76 +105,291 @@ function SourceIcon({ source }: { source: string }) {
   );
 }
 
-// ── detail sheet ─────────────────────────────────────────────────────────────
+// ── correlating attributes ────────────────────────────────────────────────────
 
-function ClusterSheet({
-  cluster, open, onClose, slug,
+function dig(obj: unknown, ...keys: string[]): string {
+  let cur: unknown = obj;
+  for (const k of keys) {
+    if (cur == null || typeof cur !== "object") return "";
+    cur = (cur as Record<string, unknown>)[k];
+  }
+  return typeof cur === "string" ? cur : "";
+}
+
+interface CrossMatch {
+  value: string;
+  sources: string[]; // deduplicated sources where this value was seen
+  count: number;
+}
+
+interface Correlations {
+  // Same value observed in 2+ distinct sources — the strongest signal
+  crossSourceMatches: CrossMatch[];
+  // Attributes unique to a single source
+  singleSource: { source: string; label: string; entries: [string, number][] }[];
+}
+
+function computeCorrelations(payloads: ClusterEvent[]): Correlations {
+  // Track each value → which sources it appeared in + total count
+  type AttrInfo = { sources: Set<string>; count: number };
+  const identityMap = new Map<string, AttrInfo>(); // emails, user/customer IDs
+  const urlMap      = new Map<string, AttrInfo>(); // page URLs
+  const errorTypes  = new Map<string, number>();
+  const frustrations = new Map<string, number>();
+
+  function track(map: Map<string, AttrInfo>, value: string, source: string) {
+    const v = value?.trim();
+    if (!v || v === "unknown" || v === "null" || v === "undefined") return;
+    const e = map.get(v);
+    if (e) { e.sources.add(source); e.count++; }
+    else map.set(v, { sources: new Set([source]), count: 1 });
+  }
+
+  for (const ev of payloads) {
+    const p = ev.payload as Record<string, unknown>;
+
+    if (ev.source === "stripe") {
+      const obj  = (p?.data as Record<string, unknown>)?.object as Record<string, unknown>;
+      const meta = obj?.metadata as Record<string, unknown> | undefined;
+      track(identityMap, String(obj?.customer  ?? ""), "stripe");
+      track(identityMap, String(meta?.email    ?? ""), "stripe");
+      track(identityMap, String(meta?.user_id  ?? ""), "stripe");
+
+    } else if (ev.source === "sentry") {
+      const data  = p?.data as Record<string, unknown>;
+      const event = data?.event as Record<string, unknown>;
+      const issue = data?.issue as Record<string, unknown>;
+      const user  = event?.user as Record<string, unknown>;
+      const req   = event?.request as Record<string, unknown>;
+      const tags  = event?.tags as [string, string][] | undefined;
+
+      track(identityMap, String(user?.email    ?? ""), "sentry");
+      track(identityMap, String(user?.id       ?? ""), "sentry");
+      track(urlMap,      String(req?.url        ?? ""), "sentry");
+
+      // culprit as URL fallback
+      const culprit = String(issue?.culprit ?? "");
+      if (!req?.url && culprit.startsWith("http")) track(urlMap, culprit, "sentry");
+
+      // customer_id from Sentry tags array
+      if (Array.isArray(tags)) {
+        for (const [k, v] of tags) {
+          if (k === "customer_id" && v) track(identityMap, v, "sentry");
+        }
+      }
+
+      const excVals = ((event?.exception as Record<string, unknown>)?.values as Record<string, unknown>[]) ?? [];
+      const errType = String(excVals[0]?.type ?? "");
+      if (errType) errorTypes.set(errType, (errorTypes.get(errType) ?? 0) + 1);
+
+    } else { // fullstory
+      const data = p?.data as Record<string, unknown>;
+      track(identityMap, String(data?.user_email ?? ""), "fullstory");
+      track(identityMap, String(data?.user_id    ?? ""), "fullstory");
+      track(urlMap,      String(data?.page_url   ?? ""), "fullstory");
+      const fr = String(data?.frustration_type ?? "");
+      if (fr && fr !== "none") frustrations.set(fr, (frustrations.get(fr) ?? 0) + 1);
+    }
+  }
+
+  // Separate cross-source (2+ sources) from single-source
+  const crossIds:  CrossMatch[] = [];
+  const crossUrls: CrossMatch[] = [];
+  const singleIdentity = new Map<string, [string, number][]>(); // source → entries
+  const singleUrl      = new Map<string, [string, number][]>();
+
+  for (const [value, { sources, count }] of identityMap) {
+    const srcList = [...sources];
+    if (srcList.length >= 2) {
+      crossIds.push({ value, sources: srcList, count });
+    } else {
+      const src = srcList[0];
+      const arr = singleIdentity.get(src) ?? [];
+      arr.push([value, count]);
+      singleIdentity.set(src, arr);
+    }
+  }
+
+  for (const [value, { sources, count }] of urlMap) {
+    const srcList = [...sources];
+    if (srcList.length >= 2) {
+      crossUrls.push({ value, sources: srcList, count });
+    } else {
+      const src = srcList[0];
+      const arr = singleUrl.get(src) ?? [];
+      arr.push([value, count]);
+      singleUrl.set(src, arr);
+    }
+  }
+
+  const allCross = [
+    ...crossIds,
+    ...crossUrls,
+  ].sort((a, b) => b.count - a.count).slice(0, 8);
+
+  const singleSource: Correlations["singleSource"] = [];
+
+  for (const [src, entries] of singleIdentity) {
+    singleSource.push({
+      source: src,
+      label: "User / Customer",
+      entries: entries.sort((a, b) => b[1] - a[1]).slice(0, 5),
+    });
+  }
+  for (const [src, entries] of singleUrl) {
+    singleSource.push({
+      source: src,
+      label: "Page URL",
+      entries: entries.sort((a, b) => b[1] - a[1]).slice(0, 3),
+    });
+  }
+  const errEntries = [...errorTypes.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+  if (errEntries.length) singleSource.push({ source: "sentry",    label: "Error type",  entries: errEntries });
+  const frEntries  = [...frustrations.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+  if (frEntries.length)  singleSource.push({ source: "fullstory", label: "Frustration", entries: frEntries });
+
+  return { crossSourceMatches: allCross, singleSource };
+}
+
+// ── detail panel (shared between inline and sheet) ───────────────────────────
+
+function ClusterDetail({
+  cluster, slug, onClose, showClose = true, onClusterUpdated,
 }: {
-  cluster: Cluster | null;
-  open: boolean;
-  onClose: () => void;
+  cluster: Cluster;
   slug: string;
+  onClose: () => void;
+  showClose?: boolean;
+  onClusterUpdated?: (updated: Partial<Cluster>) => void;
 }) {
   const [tab, setTab]                         = useState<"overview" | "raw">("overview");
   const [payloads, setPayloads]               = useState<ClusterEvent[] | null>(null);
   const [payloadsLoading, setPayloadsLoading] = useState(false);
+  const [toast, setToast]                     = useState(false);
+  const [filingIssue, setFilingIssue]         = useState(false);
+  const [issueError, setIssueError]           = useState("");
   const api = apiClient();
 
-  // Reset when a different cluster is opened
+  async function handleCreateIssue() {
+    setFilingIssue(true);
+    setIssueError("");
+    try {
+      const result = await api.post<{ issue_number: number; issue_url: string }>(
+        `/api/projects/${slug}/clusters/${cluster.id}/github-issue`,
+        {}
+      );
+      onClusterUpdated?.({
+        github_issue_number: result.issue_number,
+        github_issue_url: result.issue_url,
+        status: "investigating",
+      });
+    } catch (err) {
+      setIssueError(err instanceof Error ? err.message : "Failed to create issue");
+    } finally {
+      setFilingIssue(false);
+    }
+  }
+
+  function copyToClipboard(val: string) {
+    navigator.clipboard.writeText(val);
+    setToast(true);
+    setTimeout(() => setToast(false), 2500);
+  }
+
   useEffect(() => {
     setTab("overview");
     setPayloads(null);
-  }, [cluster?.id]);
-
-  // Lazy-fetch event payloads the first time Raw tab is opened
-  useEffect(() => {
-    if (tab !== "raw" || payloads !== null || !cluster) return;
     setPayloadsLoading(true);
     api.get<Cluster>(`/api/projects/${slug}/clusters/${cluster.id}`)
       .then((d) => setPayloads(d.event_payloads ?? []))
       .catch(() => setPayloads([]))
       .finally(() => setPayloadsLoading(false));
-  }, [tab, cluster?.id]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  if (!cluster) return null;
+  }, [cluster.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const rev = revenueLabel(cluster.revenue_score);
   const ux  = uxLabel(cluster.ux_score);
 
   return (
-    <Sheet open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
-      <SheetContent side="right" className="sm:max-w-xl w-full overflow-y-auto flex flex-col gap-0">
-        <SheetHeader className="pb-0">
-          <div className="flex items-center gap-2 flex-wrap">
+    <div className="flex flex-col h-full min-h-0">
+      {/* Header */}
+      <div className="flex items-start gap-3 px-4 pt-4 pb-3 shrink-0 border-b">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap mb-2">
             {priorityBadge(cluster.priority_score)}
             {statusBadge(cluster.status)}
+            {cluster.regression_count > 0 && (
+              <Badge variant="outline" className="text-amber-600 border-amber-400 text-[10px]">
+                Regression ×{cluster.regression_count}
+              </Badge>
+            )}
           </div>
-          <SheetTitle className="mt-2 leading-snug">{cluster.title}</SheetTitle>
-          <SheetDescription>
+          <h2 className="font-semibold text-sm leading-snug">{cluster.title}</h2>
+          <p className="text-xs text-muted-foreground mt-0.5">
             {cluster.event_count} events · {cluster.affected_users} user{cluster.affected_users !== 1 ? "s" : ""} · last seen {timeAgo(cluster.last_seen)}
-          </SheetDescription>
-        </SheetHeader>
+          </p>
 
-        {/* tab bar */}
-        <div className="flex border-b mx-4 mt-4">
-          {(["overview", "raw"] as const).map((t) => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={`px-3 py-2 text-xs font-medium transition-colors border-b-2 -mb-px ${
-                tab === t
-                  ? "border-foreground text-foreground"
-                  : "border-transparent text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {t === "overview" ? "Overview" : "Raw / Technical"}
-            </button>
-          ))}
+          {/* GitHub issue actions */}
+          <div className="mt-2 flex items-center gap-2 flex-wrap">
+            {cluster.github_issue_number ? (
+              <a
+                href={cluster.github_issue_url ?? "#"}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <IconBrandGithub className="size-3.5" />
+                #{cluster.github_issue_number}
+                <IconExternalLink className="size-3" />
+              </a>
+            ) : (
+              <button
+                onClick={handleCreateIssue}
+                disabled={filingIssue}
+                className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+              >
+                <IconBrandGithub className="size-3.5" />
+                {filingIssue ? "Filing…" : "Create GitHub issue"}
+              </button>
+            )}
+          </div>
+          {issueError && (
+            <p className="text-[11px] text-destructive mt-1">{issueError}</p>
+          )}
         </div>
+        {showClose && (
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="shrink-0 text-muted-foreground hover:text-foreground transition-colors mt-0.5"
+          >
+            <IconX className="size-4" />
+          </button>
+        )}
+      </div>
+
+      {/* Tab bar */}
+      <div className="flex border-b px-4 shrink-0">
+        {(["overview", "raw"] as const).map((t) => (
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            className={`px-3 py-2 text-xs font-medium transition-colors border-b-2 -mb-px ${
+              tab === t
+                ? "border-foreground text-foreground"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {t === "overview" ? "Overview" : "Events"}
+          </button>
+        ))}
+      </div>
+
+      {/* Scrollable content */}
+      <div className="flex-1 overflow-y-auto min-h-0">
 
         {/* overview */}
         {tab === "overview" && (
-          <div className="p-4 space-y-5 text-sm flex-1">
+          <div className="p-4 space-y-5 text-sm">
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">What&apos;s happening</p>
               <p className="leading-relaxed">{cluster.root_cause}</p>
@@ -211,25 +424,107 @@ function ClusterSheet({
             </div>
 
             <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                Correlating attributes
+              </p>
+              {payloadsLoading && (
+                <div className="rounded-md border divide-y">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="h-8 bg-muted/30 animate-pulse" />
+                  ))}
+                </div>
+              )}
+              {!payloadsLoading && payloads && (() => {
+                const corr = computeCorrelations(payloads);
+                const hasAny = corr.crossSourceMatches.length > 0 || corr.singleSource.length > 0;
+                if (!hasAny) {
+                  return <p className="text-xs text-muted-foreground">No common attributes detected across events.</p>;
+                }
+                return (
+                  <div className="rounded-md border divide-y text-xs">
+
+                    {/* ── cross-source matches (highest signal) ── */}
+                    {corr.crossSourceMatches.length > 0 && (
+                      <>
+                        <div className="px-3 py-1.5 bg-amber-50 dark:bg-amber-950/30">
+                          <p className="text-[10px] font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-400">
+                            Matched across sources
+                          </p>
+                        </div>
+                        {corr.crossSourceMatches.map(({ value, sources, count }) => (
+                          <div
+                            key={value}
+                            onClick={() => copyToClipboard(value)}
+                            title={value}
+                            className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-muted/40 transition-colors"
+                          >
+                            <div className="flex gap-0.5 shrink-0">
+                              {sources.map((src) => <SourceIcon key={src} source={src} />)}
+                            </div>
+                            <span className="flex-1 font-mono break-all">{value}</span>
+                            <span className="shrink-0 rounded bg-muted-foreground/15 px-1 text-[10px] tabular-nums text-muted-foreground">
+                              ×{count}
+                            </span>
+                          </div>
+                        ))}
+                      </>
+                    )}
+
+                    {/* ── single-source signals ── */}
+                    {corr.singleSource.filter((r) => r.entries.length > 0).map(({ source, label, entries }) => (
+                      <div key={`${source}-${label}`} className="flex flex-col gap-2 px-3 py-2.5">
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <SourceIcon source={source} />
+                          <span className="text-muted-foreground">{label}</span>
+                        </div>
+                        <div className="flex flex-wrap gap-1">
+                          {entries.map(([val, cnt]) => (
+                            <span
+                              key={val}
+                              onClick={() => copyToClipboard(val)}
+                              title={val}
+                              className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 font-mono cursor-pointer hover:bg-muted/60 transition-colors"
+                            >
+                              <span className="break-all">{val}</span>
+                              <span className="rounded bg-muted-foreground/15 px-1 text-[10px] tabular-nums text-muted-foreground">
+                                ×{cnt}
+                              </span>
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+
+                  </div>
+                );
+              })()}
+            </div>
+
+            <div>
               <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">Timeline</p>
               <p className="text-xs text-muted-foreground">
                 First seen {timeAgo(cluster.first_seen)} · Last seen {timeAgo(cluster.last_seen)}
               </p>
+            </div>
+
+            <div className="pt-1 border-t">
+              <button
+                onClick={() => setTab("raw")}
+                className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+              >
+                View all events →
+              </button>
             </div>
           </div>
         )}
 
         {/* raw / technical */}
         {tab === "raw" && (
-          <div className="p-4 space-y-5 flex-1 min-h-0">
-
-            {/* Event payloads — the primary content */}
+          <div className="p-4 space-y-5">
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">
-                Event payloads considered ({cluster.event_count} total
-                {cluster.event_count > 20 ? ", showing most recent 20" : ""})
+                Recent 20 events
               </p>
-
               {payloadsLoading && (
                 <div className="space-y-2">
                   {[1, 2, 3].map((i) => (
@@ -237,11 +532,9 @@ function ClusterSheet({
                   ))}
                 </div>
               )}
-
               {!payloadsLoading && payloads && payloads.length === 0 && (
                 <p className="text-xs text-muted-foreground">No event payloads found.</p>
               )}
-
               {!payloadsLoading && payloads && payloads.length > 0 && (
                 <div className="space-y-2">
                   {payloads.map((ev) => (
@@ -251,7 +544,6 @@ function ClusterSheet({
               )}
             </div>
 
-            {/* Score breakdown — secondary */}
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Score breakdown</p>
               <div className="rounded-md border divide-y font-mono text-xs">
@@ -274,9 +566,38 @@ function ClusterSheet({
                 Weights are configurable in Settings → Prioritization
               </p>
             </div>
-
           </div>
         )}
+
+      </div>
+
+      {/* clipboard toast */}
+      {toast && (
+        <div className="fixed bottom-4 right-4 z-50 rounded-md bg-foreground text-background text-xs px-3 py-2 shadow-lg pointer-events-none">
+          Copied to clipboard
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── sheet wrapper (small screens only) ───────────────────────────────────────
+
+function ClusterSheet({
+  cluster, open, onClose, slug, onClusterUpdated,
+}: {
+  cluster: Cluster | null;
+  open: boolean;
+  onClose: () => void;
+  slug: string;
+  onClusterUpdated?: (patch: Partial<Cluster>) => void;
+}) {
+  if (!cluster) return null;
+  return (
+    <Sheet open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
+      <SheetContent side="right" className="w-full sm:max-w-xl p-0 flex flex-col">
+        <SheetTitle className="sr-only">{cluster.title}</SheetTitle>
+        <ClusterDetail cluster={cluster} slug={slug} onClose={onClose} showClose={false} onClusterUpdated={onClusterUpdated} />
       </SheetContent>
     </Sheet>
   );
@@ -287,7 +608,7 @@ function ClusterSheet({
 function EventPayloadBlock({ event }: { event: ClusterEvent }) {
   const [expanded, setExpanded] = useState(false);
   return (
-    <div className="rounded-md border overflow-hidden">
+    <div className="rounded-md border overflow-hidden cursor-pointer">
       <button
         onClick={() => setExpanded((v) => !v)}
         className="w-full flex items-center gap-2 px-3 py-2 text-xs text-left hover:bg-muted/40 transition-colors"
@@ -304,6 +625,20 @@ function EventPayloadBlock({ event }: { event: ClusterEvent }) {
       )}
     </div>
   );
+}
+
+// ── breakpoint hook ───────────────────────────────────────────────────────────
+
+function useIsXl() {
+  const [isXl, setIsXl] = useState<boolean | null>(null);
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 1280px)");
+    setIsXl(mq.matches);
+    const handler = (e: MediaQueryListEvent) => setIsXl(e.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
+  return isXl;
 }
 
 // ── main feed ────────────────────────────────────────────────────────────────
@@ -323,7 +658,15 @@ export default function ClustersFeed({
   const [activeCluster, setActiveCluster]   = useState<Cluster | null>(null);
   const [crossChannel, setCrossChannel]     = useState(initialCrossChannel);
   const [togglingMode, setTogglingMode]     = useState(false);
+  const isXl = useIsXl();
   const api = apiClient();
+
+  // Apply optimistic updates to a cluster (e.g. after filing a GitHub issue)
+  function handleClusterUpdated(id: string, patch: Partial<Cluster>) {
+    if (activeCluster?.id === id) {
+      setActiveCluster((c) => c ? { ...c, ...patch } : c);
+    }
+  }
 
   const clusters = data?.items ?? [];
   const allSelected     = clusters.length > 0 && selected.size === clusters.length;
@@ -369,7 +712,9 @@ export default function ClustersFeed({
   }
 
   return (
-    <div className="space-y-3">
+    <div className="flex items-start gap-4">
+      {/* left column — toolbar + table */}
+      <div className="flex-1 min-w-0 space-y-3">
       {/* toolbar */}
       <div className="flex items-center justify-between gap-4">
         <p className="text-sm text-muted-foreground">
@@ -457,6 +802,7 @@ export default function ClustersFeed({
                 <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground w-20">Users</th>
                 <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground w-28">Last seen</th>
                 <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground w-28">Status</th>
+                <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground w-10"></th>
               </tr>
             </thead>
             <tbody className="divide-y">
@@ -464,7 +810,11 @@ export default function ClustersFeed({
                 <tr
                   key={cluster.id}
                   onClick={() => setActiveCluster(cluster)}
-                  className="hover:bg-muted/30 cursor-pointer transition-colors"
+                  className={`cursor-pointer transition-colors ${
+                    activeCluster?.id === cluster.id
+                      ? "bg-muted/50"
+                      : "hover:bg-muted/30"
+                  }`}
                 >
                   <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
                     <input
@@ -483,6 +833,19 @@ export default function ClustersFeed({
                   <td className="px-3 py-3 text-muted-foreground tabular-nums">{cluster.affected_users}</td>
                   <td className="px-3 py-3 text-muted-foreground">{timeAgo(cluster.last_seen)}</td>
                   <td className="px-3 py-3">{statusBadge(cluster.status)}</td>
+                  <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                    {cluster.github_issue_number && (
+                      <a
+                        href={cluster.github_issue_url ?? "#"}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={`GitHub #${cluster.github_issue_number}`}
+                        className="text-muted-foreground hover:text-foreground transition-colors"
+                      >
+                        <IconBrandGithub className="size-4" />
+                      </a>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -490,13 +853,30 @@ export default function ClustersFeed({
         </div>
       )}
 
-      {/* detail sheet */}
-      <ClusterSheet
-        cluster={activeCluster}
-        open={activeCluster !== null}
-        onClose={() => setActiveCluster(null)}
-        slug={slug}
-      />
+      </div>{/* end left column */}
+
+      {/* right column — inline panel on xl */}
+      {isXl && activeCluster && (
+        <aside className="w-[420px] shrink-0 border-l flex flex-col sticky top-[calc(3rem+1px)] max-h-[calc(100vh-3rem-1px)] overflow-hidden -mr-6">
+          <ClusterDetail
+            cluster={activeCluster}
+            slug={slug}
+            onClose={() => setActiveCluster(null)}
+            onClusterUpdated={(patch) => handleClusterUpdated(activeCluster.id, patch)}
+          />
+        </aside>
+      )}
+
+      {/* sheet overlay — small screens only */}
+      {isXl === false && (
+        <ClusterSheet
+          cluster={activeCluster}
+          open={activeCluster !== null}
+          onClose={() => setActiveCluster(null)}
+          slug={slug}
+          onClusterUpdated={(patch) => activeCluster && handleClusterUpdated(activeCluster.id, patch)}
+        />
+      )}
     </div>
   );
 }

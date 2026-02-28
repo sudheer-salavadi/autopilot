@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { IconCheck, IconCopy } from "@tabler/icons-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -12,7 +12,6 @@ import { apiClient } from "@/lib/api";
 import type { Integration, Project } from "@/components/IntegrationsPanel";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-const SIMULATE_DELAY_MS = 1_000; // pause between generations
 
 interface Props {
   project: Project;
@@ -35,7 +34,6 @@ export default function IntegrationConfig({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
-  const runningRef = useRef(false);
   const api = apiClient();
 
   const webhookUrl = `${API_URL}/api/webhooks/${project.id}/${type}`;
@@ -45,34 +43,6 @@ export default function IntegrationConfig({
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
-
-  // Start/stop the generation loop based on isSimulating.
-  // Uses an async loop instead of setInterval so the next request only
-  // fires after the previous one completes — no queuing.
-  useEffect(() => {
-    if (!isSimulating) {
-      runningRef.current = false;
-      return;
-    }
-
-    runningRef.current = true;
-
-    const loop = async () => {
-      while (runningRef.current) {
-        await api
-          .post(`/api/projects/${project.slug}/demo-ingest`, { source: type })
-          .catch(() => {});
-        if (!runningRef.current) break;
-        await new Promise((res) => setTimeout(res, SIMULATE_DELAY_MS));
-      }
-    };
-
-    loop();
-
-    return () => {
-      runningRef.current = false;
-    };
-  }, [isSimulating]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

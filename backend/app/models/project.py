@@ -44,6 +44,9 @@ class Project(Base, TimestampMixin):
     scoring_config: Mapped["ProjectScoringConfig"] = relationship(  # noqa: F821
         "ProjectScoringConfig", back_populates="project", uselist=False, cascade="all, delete-orphan"
     )
+    github_config: Mapped["ProjectGithubConfig"] = relationship(  # noqa: F821
+        "ProjectGithubConfig", back_populates="project", uselist=False, cascade="all, delete-orphan"
+    )
 
 
 class ProjectMember(Base, TimestampMixin):

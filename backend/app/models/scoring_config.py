@@ -19,6 +19,9 @@ class ProjectScoringConfig(Base):
     max_revenue_usd: Mapped[float] = mapped_column(Float, nullable=False, default=10000.0)
     max_frequency_count: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
     cross_channel: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    simulate_stripe: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    simulate_sentry: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    simulate_fullstory: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     # Relationships
     project: Mapped["Project"] = relationship("Project", back_populates="scoring_config")  # noqa: F821

@@ -6,9 +6,10 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api import auth, clusters, demo, events, integrations, members, projects, scoring_config, webhooks
+from app.api import auth, clusters, demo, events, github_config, integrations, members, projects, scoring_config, webhooks
 from app.config import settings
 from app.db.session import AsyncSessionLocal
+from app.services.demo import simulate_active_projects
 from app.services.evaluator import evaluate_all_projects
 
 logger = logging.getLogger(__name__)
@@ -25,13 +26,24 @@ async def lifespan(app: FastAPI):
                 pass
             await asyncio.sleep(120)
 
-    task = asyncio.create_task(background_evaluator())
+    async def background_simulator():
+        while True:
+            try:
+                async with AsyncSessionLocal() as db:
+                    await simulate_active_projects(db)
+            except Exception:
+                pass
+            await asyncio.sleep(3)
+
+    evaluator_task = asyncio.create_task(background_evaluator())
+    simulator_task = asyncio.create_task(background_simulator())
     yield
-    task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
+    for task in (evaluator_task, simulator_task):
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
 
 app = FastAPI(title="Autopilot API", version="0.1.0", lifespan=lifespan)
@@ -54,6 +66,7 @@ app.include_router(webhooks.router)
 app.include_router(demo.router)
 app.include_router(clusters.router)
 app.include_router(scoring_config.router)
+app.include_router(github_config.router)
 
 
 @app.exception_handler(Exception)

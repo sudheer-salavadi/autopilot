@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import require_project_member
 from app.db.session import AsyncSessionLocal, get_db
 from app.models.event import Event
+from app.models.scoring_config import ProjectScoringConfig
 from app.services.demo import generate_demo_events
 
 router = APIRouter()
@@ -17,6 +18,10 @@ router = APIRouter()
 
 class DemoRequest(BaseModel):
     source: str  # "stripe" or "sentry"
+
+
+class SimulateToggle(BaseModel):
+    active: bool
 
 
 async def _trigger_evaluate(project_id: uuid.UUID) -> None:
@@ -79,3 +84,34 @@ async def ingest_demo_events(
     await db.commit()
     asyncio.create_task(_trigger_evaluate(project.id))
     return {"inserted": len(events_data)}
+
+
+@router.post("/api/projects/{slug}/integrations/{source}/simulate")
+async def toggle_simulation(
+    source: str,
+    body: SimulateToggle,
+    deps=Depends(require_project_member),
+    db: AsyncSession = Depends(get_db),
+):
+    if source not in ("stripe", "sentry", "fullstory"):
+        raise HTTPException(status_code=400, detail="source must be stripe, sentry, or fullstory")
+
+    project, _, _ = deps
+
+    result = await db.execute(
+        select(ProjectScoringConfig).where(ProjectScoringConfig.project_id == project.id)
+    )
+    config = result.scalar_one_or_none()
+    if not config:
+        config = ProjectScoringConfig(project_id=project.id)
+        db.add(config)
+        await db.flush()
+
+    field_map = {
+        "stripe": "simulate_stripe",
+        "sentry": "simulate_sentry",
+        "fullstory": "simulate_fullstory",
+    }
+    setattr(config, field_map[source], body.active)
+    await db.commit()
+    return {"active": body.active}

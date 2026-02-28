@@ -9,6 +9,7 @@ import {
   IconPointer,
 } from "@tabler/icons-react";
 import { cn } from "@/lib/utils";
+import { apiClient } from "@/lib/api";
 import IntegrationConfig from "@/components/IntegrationConfig";
 import IntegrationPreview from "@/components/IntegrationPreview";
 
@@ -87,13 +88,16 @@ function statusLabel(simulating: boolean, integration?: Integration) {
 export default function IntegrationsPanel({
   project,
   initialIntegrations,
+  initialSimulatingTypes = [],
 }: {
   project: Project;
   initialIntegrations: Integration[];
+  initialSimulatingTypes?: string[];
 }) {
   const [integrations, setIntegrations] = useState(initialIntegrations);
   const [selectedType, setSelectedType] = useState<string | null>(null);
-  const [simulatingTypes, setSimulatingTypes] = useState<Set<string>>(new Set());
+  const [simulatingTypes, setSimulatingTypes] = useState<Set<string>>(new Set(initialSimulatingTypes));
+  const api = apiClient();
 
   const configuredMap = new Map(integrations.map((i) => [i.type, i]));
 
@@ -110,12 +114,25 @@ export default function IntegrationsPanel({
   };
 
   const handleSimulateToggle = (type: string, active: boolean) => {
+    // Optimistic update — reflects immediately in UI
     setSimulatingTypes((prev) => {
       const next = new Set(prev);
       if (active) next.add(type);
       else next.delete(type);
       return next;
     });
+    // Persist to server so simulation continues even after navigation
+    api
+      .post(`/api/projects/${project.slug}/integrations/${type}/simulate`, { active })
+      .catch(() => {
+        // Revert on failure
+        setSimulatingTypes((prev) => {
+          const next = new Set(prev);
+          if (active) next.delete(type);
+          else next.add(type);
+          return next;
+        });
+      });
   };
 
   return (

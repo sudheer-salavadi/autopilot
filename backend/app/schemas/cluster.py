@@ -33,6 +33,11 @@ class ClusterOut(BaseModel):
     status: ClusterStatus
     created_at: datetime
     updated_at: datetime
+    # Regression / GitHub fields
+    parent_cluster_id: uuid.UUID | None = None
+    regression_count: int = 0
+    github_issue_number: int | None = None
+    github_issue_url: str | None = None
     event_ids: list[uuid.UUID] = []
     event_payloads: list[ClusterEventOut] | None = None
 
