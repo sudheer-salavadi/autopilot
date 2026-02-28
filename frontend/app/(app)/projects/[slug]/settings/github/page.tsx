@@ -5,6 +5,7 @@ interface GithubConfig {
   project_id: string;
   repo: string | null;
   has_token: boolean;
+  has_webhook_secret: boolean;
   autopilot_enabled: boolean;
   autopilot_min_score: number;
 }
@@ -12,6 +13,7 @@ interface GithubConfig {
 const DEFAULT_CONFIG: Omit<GithubConfig, "project_id"> = {
   repo: null,
   has_token: false,
+  has_webhook_secret: false,
   autopilot_enabled: false,
   autopilot_min_score: 0.7,
 };

@@ -20,6 +20,8 @@ class ProjectGithubConfig(Base):
     repo: Mapped[str | None] = mapped_column(String, nullable=True)
     # Personal access token — Fernet-encrypted at rest, never returned in responses
     token: Mapped[str | None] = mapped_column(EncryptedString, nullable=True)
+    # Webhook secret — set in GitHub repo settings, used to verify inbound payloads
+    webhook_secret: Mapped[str | None] = mapped_column(EncryptedString, nullable=True)
     # Autopilot: auto-file GitHub issues when a cluster exceeds the min score
     autopilot_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False

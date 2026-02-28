@@ -268,7 +268,23 @@ function ClusterDetail({
   const [toast, setToast]                     = useState(false);
   const [filingIssue, setFilingIssue]         = useState(false);
   const [issueError, setIssueError]           = useState("");
+  const [resolving, setResolving]             = useState(false);
   const api = apiClient();
+
+  async function handleResolve() {
+    setResolving(true);
+    try {
+      await api.patch(`/api/projects/${slug}/clusters/${cluster.id}/status`, {
+        status: "resolved",
+      });
+      onClusterUpdated?.({ status: "resolved" });
+      onClose();
+    } catch {
+      // silently ignore — status unchanged
+    } finally {
+      setResolving(false);
+    }
+  }
 
   async function handleCreateIssue() {
     setFilingIssue(true);
@@ -354,6 +370,17 @@ function ClusterDetail({
           </div>
           {issueError && (
             <p className="text-[11px] text-destructive mt-1">{issueError}</p>
+          )}
+
+          {/* Resolve — only show for open/investigating clusters */}
+          {cluster.status !== "resolved" && (
+            <button
+              onClick={handleResolve}
+              disabled={resolving}
+              className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-emerald-600 transition-colors disabled:opacity-50"
+            >
+              {resolving ? "Resolving…" : "✓ Mark as resolved"}
+            </button>
           )}
         </div>
         {showClose && (
@@ -665,6 +692,11 @@ export default function ClustersFeed({
   function handleClusterUpdated(id: string, patch: Partial<Cluster>) {
     if (activeCluster?.id === id) {
       setActiveCluster((c) => c ? { ...c, ...patch } : c);
+    }
+    // When a cluster is resolved it drops off the active list — refetch
+    if (patch.status === "resolved") {
+      setActiveCluster(null);
+      refetch();
     }
   }
 

@@ -39,6 +39,7 @@ def _to_out(config: ProjectGithubConfig) -> GithubConfigOut:
         project_id=config.project_id,
         repo=config.repo,
         has_token=config.token is not None,
+        has_webhook_secret=config.webhook_secret is not None,
         autopilot_enabled=config.autopilot_enabled,
         autopilot_min_score=config.autopilot_min_score,
     )
@@ -68,6 +69,8 @@ async def update_github_config(
         config.repo = body.repo or None
     if body.token is not None:
         config.token = body.token or None
+    if body.webhook_secret is not None:
+        config.webhook_secret = body.webhook_secret or None
     if body.autopilot_enabled is not None:
         config.autopilot_enabled = body.autopilot_enabled
     if body.autopilot_min_score is not None:

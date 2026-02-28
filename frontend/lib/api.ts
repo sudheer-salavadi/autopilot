@@ -39,6 +39,20 @@ export function apiClient() {
       return res.json();
     },
 
+    async patch<T>(path: string, body?: unknown): Promise<T> {
+      const res = await fetch(`${PUBLIC_API}${path}`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new Error(err.detail ?? `API ${res.status}`);
+      }
+      return res.json();
+    },
+
     async del(path: string): Promise<void> {
       const res = await fetch(`${PUBLIC_API}${path}`, {
         method: "DELETE",

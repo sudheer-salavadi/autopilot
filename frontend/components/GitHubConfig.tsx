@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { IconBrandGithub, IconCheck, IconCircleFilled, IconExternalLink } from "@tabler/icons-react";
+import { IconBrandGithub, IconCheck, IconCircleFilled, IconCopy, IconExternalLink } from "@tabler/icons-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,6 +13,7 @@ interface GithubConfig {
   project_id: string;
   repo: string | null;
   has_token: boolean;
+  has_webhook_secret: boolean;
   autopilot_enabled: boolean;
   autopilot_min_score: number;
 }
@@ -27,6 +28,7 @@ export default function GitHubConfig({
   const [config, setConfig] = useState(initialConfig);
   const [repo, setRepo] = useState(initialConfig.repo ?? "");
   const [token, setToken] = useState("");
+  const [webhookSecret, setWebhookSecret] = useState("");
   const [saving, setSaving] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [verifyResult, setVerifyResult] = useState<{ ok: boolean; message: string } | null>(null);
@@ -42,12 +44,14 @@ export default function GitHubConfig({
     try {
       const body: Record<string, unknown> = { repo };
       if (token) body.token = token;
+      if (webhookSecret) body.webhook_secret = webhookSecret;
       const updated = await api.put<GithubConfig>(
         `/api/projects/${slug}/github-config`,
         body
       );
       setConfig(updated);
       setToken("");
+      setWebhookSecret("");
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
     } catch (err) {
@@ -99,6 +103,15 @@ export default function GitHubConfig({
   };
 
   const isConfigured = config.has_token && !!config.repo;
+  const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+  const webhookUrl = `${API_URL}/api/webhooks/${config.project_id}/github`;
+
+  const [copiedWebhook, setCopiedWebhook] = useState(false);
+  function copyWebhookUrl() {
+    navigator.clipboard.writeText(webhookUrl);
+    setCopiedWebhook(true);
+    setTimeout(() => setCopiedWebhook(false), 2000);
+  }
 
   return (
     <div className="max-w-lg space-y-6">
@@ -157,6 +170,48 @@ export default function GitHubConfig({
             Needs <span className="font-mono">repo</span> scope (or{" "}
             <span className="font-mono">public_repo</span> for public repos).
             Encrypted at rest, never exposed.
+          </p>
+        </div>
+
+        {/* Webhook URL */}
+        <div className="space-y-1.5">
+          <Label className="text-xs">Webhook URL</Label>
+          <div className="flex gap-1.5">
+            <Input
+              readOnly
+              value={config.project_id ? webhookUrl : "Save repo & token first"}
+              className="font-mono text-[11px] h-8"
+            />
+            {config.project_id && (
+              <Button type="button" variant="outline" size="icon-sm" onClick={copyWebhookUrl}>
+                {copiedWebhook ? (
+                  <IconCheck className="size-3.5 text-emerald-600" />
+                ) : (
+                  <IconCopy className="size-3.5" />
+                )}
+              </Button>
+            )}
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            Paste this URL into your GitHub repo → Settings → Webhooks.
+            Select the <span className="font-mono">Issues</span> event.
+          </p>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="gh-webhook-secret" className="text-xs">
+            {config.has_webhook_secret ? "Rotate Webhook Secret" : "Webhook Secret"}
+          </Label>
+          <Input
+            id="gh-webhook-secret"
+            type="password"
+            value={webhookSecret}
+            onChange={(e) => setWebhookSecret(e.target.value)}
+            placeholder={config.has_webhook_secret ? "Leave blank to keep existing" : "Set a secret in GitHub, paste it here"}
+            className="font-mono text-xs h-8"
+          />
+          <p className="text-[11px] text-muted-foreground">
+            Used to verify GitHub webhook signatures. Set the same value in GitHub webhook settings.
           </p>
         </div>
 
