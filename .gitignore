@@ -34,3 +34,4 @@ out/
 *.swo
 .DS_Store
 *.pem
+deployment-log.txt
