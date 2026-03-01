@@ -78,33 +78,6 @@ const CATALOG: { group: string; items: CatalogEntry[] }[] = [
 
 // ── educational empty state ───────────────────────────────────────────────────
 
-const DATA_SOURCES = [
-  {
-    type: "stripe",
-    label: "Stripe",
-    color: "bg-violet-500/10 text-violet-700 dark:text-violet-400",
-    dot: "bg-violet-500",
-    description: "Captures payment failures, disputes, subscription cancellations, and past-due invoices — the revenue impact signal.",
-    signals: ["payment_intent.payment_failed", "charge.dispute.created", "invoice.payment_failed", "customer.subscription.deleted"],
-  },
-  {
-    type: "sentry",
-    label: "Sentry",
-    color: "bg-rose-500/10 text-rose-700 dark:text-rose-400",
-    dot: "bg-rose-500",
-    description: "Captures unhandled exceptions, error spikes, and crash reports — the code health signal.",
-    signals: ["error.created (level: error)", "error.created (level: fatal)", "issue.resolved", "metric_alert.critical"],
-  },
-  {
-    type: "fullstory",
-    label: "FullStory",
-    color: "bg-sky-500/10 text-sky-700 dark:text-sky-400",
-    dot: "bg-sky-500",
-    description: "Captures rage clicks, dead clicks, and thrash patterns in user sessions — the UX frustration signal.",
-    signals: ["frustration (rage_click)", "frustration (dead_click)", "frustration (thrash)", "frustration (error_click)"],
-  },
-];
-
 function IntegrationsOverview() {
   return (
     <div className="flex-1 overflow-y-auto">
@@ -142,58 +115,6 @@ function IntegrationsOverview() {
                 </div>
               )
             )}
-          </div>
-        </div>
-
-        {/* Data source cards */}
-        <div>
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-3">Data Ingestion</p>
-          <div className="space-y-3">
-            {DATA_SOURCES.map((src) => (
-              <div key={src.type} className="rounded-lg border bg-card p-4 space-y-3">
-                <div className="flex items-center gap-3">
-                  <Image src={`/integrations-icns/${src.type}.svg`} alt={src.label} width={20} height={20} />
-                  <span className="text-sm font-semibold">{src.label}</span>
-                  {/* <span className={`ml-auto text-[11px] font-medium rounded-full px-2.5 py-0.5 ${src.color}`}>
-                    Data Ingestion
-                  </span> */}
-                </div>
-                <p className="text-xs text-muted-foreground leading-relaxed">{src.description}</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {src.signals.map((s) => (
-                    <span key={s} className="rounded bg-muted/60 border px-2 py-0.5 text-[11px] font-mono text-muted-foreground">
-                      {s}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Workflows */}
-        <div>
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-3">Workflows</p>
-          <div className="rounded-lg border bg-card p-4 space-y-3">
-            <div className="flex items-center gap-3">
-              <IconBrandGithub className="size-5 text-foreground" />
-              <span className="text-sm font-semibold">GitHub</span>
-              {/* <span className="ml-auto text-[11px] font-medium rounded-full px-2.5 py-0.5 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400">
-                Workflow
-              </span> */}
-            </div>
-            <p className="text-xs text-muted-foreground leading-relaxed">
-              Connect your GitHub repo to let Autopilot file issues automatically when a cluster
-              crosses your severity threshold. Issues are linked back to the cluster so you can
-              track resolution end-to-end.
-            </p>
-            <div className="flex flex-wrap gap-1.5">
-              {["Auto-file on threshold", "Link cluster ↔ issue", "Mark resolved on close"].map((f) => (
-                <span key={f} className="rounded bg-muted/60 border px-2 py-0.5 text-[11px] font-mono text-muted-foreground">
-                  {f}
-                </span>
-              ))}
-            </div>
           </div>
         </div>
 

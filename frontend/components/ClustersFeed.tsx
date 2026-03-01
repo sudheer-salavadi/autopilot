@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { IconBrandGithub, IconExternalLink, IconFilter, IconRefresh, IconSearch, IconX } from "@tabler/icons-react";
+import { IconArrowDown, IconArrowUp, IconArrowsUpDown, IconBrandGithub, IconCheck, IconChevronDown, IconChevronLeft, IconChevronRight, IconChevronUp, IconChevronsDown, IconChevronsUp, IconExternalLink, IconFilter, IconMinus, IconRefresh, IconSearch, IconX } from "@tabler/icons-react";
 import { JsonBlock } from "@/components/JsonBlock";
 import { type Cluster, type ClusterEvent, type ClustersPage, type ClustersParams, useClusters } from "@/lib/hooks/useClusters";
 import { apiClient } from "@/lib/api";
@@ -21,18 +21,67 @@ import {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
+type SeverityLevel = "Critical" | "High" | "Medium" | "Low" | "Lowest";
+
+function getSeverity(score: number): SeverityLevel {
+  if (score >= 0.7)  return "Critical";
+  if (score >= 0.4)  return "High";
+  if (score >= 0.2)  return "Medium";
+  if (score >= 0.05) return "Low";
+  return "Lowest";
+}
+
+const SEVERITY_CFG: Record<SeverityLevel, {
+  icon: React.ElementType;
+  iconClass: string;
+  badgeClass: string;
+}> = {
+  Critical: { icon: IconChevronsUp,   iconClass: "text-red-500 dark:text-red-400",    badgeClass: "bg-red-100 text-red-800 hover:bg-red-100 dark:bg-red-900/30 dark:text-red-400 border-0" },
+  High:     { icon: IconChevronUp,    iconClass: "text-orange-500 dark:text-orange-400", badgeClass: "bg-orange-100 text-orange-800 hover:bg-orange-100 dark:bg-orange-900/30 dark:text-orange-400 border-0" },
+  Medium:   { icon: IconMinus,        iconClass: "text-amber-500 dark:text-amber-400",  badgeClass: "bg-amber-100 text-amber-800 hover:bg-amber-100 dark:bg-amber-900/30 dark:text-amber-400 border-0" },
+  Low:      { icon: IconChevronDown,  iconClass: "text-green-500 dark:text-green-400",  badgeClass: "bg-green-100 text-green-800 hover:bg-green-100 dark:bg-green-900/30 dark:text-green-400 border-0" },
+  Lowest:   { icon: IconChevronsDown, iconClass: "text-muted-foreground/50",            badgeClass: "bg-muted text-muted-foreground hover:bg-muted border-0" },
+};
+
 function priorityBadge(score: number) {
-  if (score >= 0.7) return <Badge className="bg-red-100 text-red-800 hover:bg-red-100 dark:bg-red-900/30 dark:text-red-400 border-0">Critical</Badge>;
-  if (score >= 0.4) return <Badge className="bg-orange-100 text-orange-800 hover:bg-orange-100 dark:bg-orange-900/30 dark:text-orange-400 border-0">High</Badge>;
-  if (score >= 0.2) return <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100 dark:bg-amber-900/30 dark:text-amber-400 border-0">Medium</Badge>;
-  return               <Badge className="bg-green-100 text-green-800 hover:bg-green-100 dark:bg-green-900/30 dark:text-green-400 border-0">Low</Badge>;
+  const level = getSeverity(score);
+  const { icon: Icon, iconClass, badgeClass } = SEVERITY_CFG[level];
+  return (
+    <Badge className={`gap-1 ${badgeClass}`}>
+      <Icon className={`size-3 ${iconClass}`} />
+      {level}
+    </Badge>
+  );
+}
+
+function PriorityIcon({ score }: { score: number }) {
+  const level = getSeverity(score);
+  const { icon: Icon, iconClass } = SEVERITY_CFG[level];
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="inline-flex items-center">
+          <Icon className={`size-4 shrink-0 ${iconClass}`} />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="right">{level}</TooltipContent>
+    </Tooltip>
+  );
 }
 
 function statusBadge(status: Cluster["status"]) {
   const map: Record<Cluster["status"], "default" | "secondary" | "outline"> = {
     open: "default", investigating: "secondary", resolved: "outline",
   };
-  return <Badge variant={map[status]}>{status}</Badge>;
+  const labels: Record<Cluster["status"], string> = {
+    open: "Open", investigating: "Investigating", resolved: "Resolved",
+  };
+  return (
+    <Badge variant={map[status]} className="gap-1">
+      {status === "resolved" && <IconCheck className="size-3" />}
+      {labels[status]}
+    </Badge>
+  );
 }
 
 function timeAgo(iso: string): string {
@@ -361,12 +410,12 @@ function ClusterDetail({
             )}
           </div>
           <h2 className="font-semibold text-sm leading-snug">{cluster.title}</h2>
-          <p className="text-xs text-muted-foreground mt-0.5">
+          {/* <p className="text-xs text-muted-foreground mt-0.5">
             {cluster.event_count} events · {cluster.affected_users} user{cluster.affected_users !== 1 ? "s" : ""} · last seen {timeAgo(cluster.last_seen)}
-          </p>
+          </p> */}
 
           {/* Actions row — GitHub + Resolve on one line, wraps if needed */}
-          <div className="mt-2 flex items-center gap-x-3 gap-y-1 flex-wrap">
+          <div className="mt-2 flex items-center gap-x-5 gap-y-1 flex-wrap">
             {cluster.github_issue_number ? (
               <a
                 href={cluster.github_issue_url ?? "#"}
@@ -393,7 +442,7 @@ function ClusterDetail({
               <button
                 onClick={handleResolve}
                 disabled={resolving}
-                className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-emerald-600 transition-colors disabled:opacity-50"
+                className="inline-flex items-center gap-1 text-[11px] text-muted-foreground transition-colors disabled:opacity-50"
               >
                 {resolving ? "Resolving…" : "✓ Mark as resolved"}
               </button>
@@ -694,6 +743,34 @@ function useIsXl() {
   return isXl;
 }
 
+// ── sortable column header ────────────────────────────────────────────────────
+
+type SortKey = "priority_score" | "event_count" | "affected_users" | "last_seen";
+
+function SortableHeader({
+  label, sortKey, currentSortBy, currentSortDir, onSort,
+}: {
+  label: string;
+  sortKey: SortKey;
+  currentSortBy: SortKey | null;
+  currentSortDir: "asc" | "desc";
+  onSort: (key: SortKey) => void;
+}) {
+  const active = currentSortBy === sortKey;
+  const Icon = active
+    ? currentSortDir === "asc" ? IconArrowUp : IconArrowDown
+    : IconArrowsUpDown;
+  return (
+    <button
+      onClick={() => onSort(sortKey)}
+      className="flex items-center gap-1 group select-none"
+    >
+      {label}
+      <Icon className={`size-3 transition-opacity ${active ? "opacity-80" : "opacity-0 group-hover:opacity-40"}`} />
+    </button>
+  );
+}
+
 // ── source filter pill ────────────────────────────────────────────────────────
 
 const SOURCES = [
@@ -714,11 +791,16 @@ export default function ClustersFeed({
   initialData?: ClustersPage | null;
   initialCrossChannel?: boolean;
 }) {
-  // ── view / filter state ───────────────────────────────────────────────────
-  const [view, setView]             = useState<"active" | "resolved">("active");
-  const [filterSource, setSource]   = useState("");
-  const [search, setSearch]         = useState("");
+  // ── view / filter / sort / page state ────────────────────────────────────
+  const [view, setView]               = useState<"active" | "resolved">("active");
+  const [filterSource, setSource]     = useState("");
+  const [search, setSearch]           = useState("");
   const [showFilters, setShowFilters] = useState(false);
+  const [sortBy, setSortBy]           = useState<SortKey | null>(null);
+  const [sortDir, setSortDir]         = useState<"asc" | "desc">("desc");
+  const [page, setPage]               = useState(1);
+
+  const PAGE_SIZE = 20;
 
   const params: ClustersParams = {
     view,
@@ -761,8 +843,15 @@ export default function ClustersFeed({
     document.addEventListener("mouseup", onUp);
   }
 
-  // Reset selection when view/filters change
-  useEffect(() => { setSelected(new Set()); setActiveCluster(null); }, [view, filterSource, search]);
+  function handleSort(key: SortKey) {
+    if (sortBy !== key) { setSortBy(key); setSortDir("desc"); }
+    else if (sortDir === "desc") { setSortDir("asc"); }
+    else { setSortBy(null); }
+    setPage(1);
+  }
+
+  // Reset selection + page when view/filters/sort change
+  useEffect(() => { setSelected(new Set()); setActiveCluster(null); setPage(1); }, [view, filterSource, search]);
 
   // Apply optimistic updates to a cluster (e.g. after filing a GitHub issue)
   function handleClusterUpdated(id: string, patch: Partial<Cluster>) {
@@ -776,13 +865,36 @@ export default function ClustersFeed({
   }
 
   const allClusters = data?.items ?? [];
+
+  // 1. Search filter
   const q = search.trim().toLowerCase();
-  const clusters = q
+  const searched = q
     ? allClusters.filter((c) =>
         c.title.toLowerCase().includes(q) || c.root_cause.toLowerCase().includes(q)
       )
     : allClusters;
-  const allSelected = clusters.length > 0 && selected.size === clusters.length;
+
+  // 2. Sort
+  const sorted = sortBy
+    ? [...searched].sort((a, b) => {
+        let diff: number;
+        if (sortBy === "last_seen") {
+          diff = new Date(a.last_seen).getTime() - new Date(b.last_seen).getTime();
+        } else {
+          diff = (a[sortBy] as number) - (b[sortBy] as number);
+        }
+        return sortDir === "asc" ? diff : -diff;
+      })
+    : searched;
+
+  // 3. Paginate
+  const totalItems  = sorted.length;
+  const totalPages  = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
+  const clampedPage = Math.min(page, totalPages);
+  const pageStart   = (clampedPage - 1) * PAGE_SIZE;
+  const clusters    = sorted.slice(pageStart, pageStart + PAGE_SIZE);
+
+  const allSelected = clusters.length > 0 && clusters.every((c) => selected.has(c.id));
   const someSelected = selected.size > 0 && !allSelected;
 
   function toggleAll(checked: boolean) {
@@ -821,7 +933,7 @@ export default function ClustersFeed({
   const hasActiveFilters = filterSource !== "" || search !== "";
 
   return (
-    <div className={`flex -mt-10 items-start${isDragging ? " select-none" : ""}`}>
+    <div className={`flex -mt-6 items-start${isDragging ? " select-none" : ""}`}>
       {/* left column */}
       <div className="flex-1 min-w-0 space-y-3">
 
@@ -845,7 +957,7 @@ export default function ClustersFeed({
         {/* ── Toolbar ────────────────────────────────────────────────── */}
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <p className="text-sm text-muted-foreground">
-            {data ? `${data.total} issue${data.total !== 1 ? "s" : ""}` : ""}
+            {data ? `${totalItems} issue${totalItems !== 1 ? "s" : ""}` : ""}
             {selected.size > 0 && (
               <span className="ml-2 text-foreground font-medium">· {selected.size} selected</span>
             )}
@@ -962,7 +1074,7 @@ export default function ClustersFeed({
         )}
 
         {/* empty */}
-        {!loading && !error && clusters.length === 0 && (
+        {!loading && !error && totalItems === 0 && (
           <div className="rounded-lg border border-dashed p-8 text-center">
             <p className="text-sm text-muted-foreground">
               {view === "resolved"
@@ -980,7 +1092,7 @@ export default function ClustersFeed({
         )}
 
         {/* table */}
-        {!loading && clusters.length > 0 && (
+        {!loading && totalItems > 0 && (
           <div className="rounded-lg border overflow-hidden">
             <table className="w-full text-sm">
               <thead>
@@ -994,15 +1106,24 @@ export default function ClustersFeed({
                       />
                     </th>
                   )}
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground w-24">Severity</th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground">Issue</th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground w-20">Events</th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground w-20">Users</th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground w-28">
-                    {view === "resolved" ? "Resolved" : "Last seen"}
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground">
+                    <SortableHeader label="Issue" sortKey="priority_score" currentSortBy={sortBy} currentSortDir={sortDir} onSort={handleSort} />
                   </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground w-28">Status</th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground w-10"></th>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground w-20">
+                    <SortableHeader label="Events" sortKey="event_count" currentSortBy={sortBy} currentSortDir={sortDir} onSort={handleSort} />
+                  </th>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground w-20">
+                    <SortableHeader label="Users" sortKey="affected_users" currentSortBy={sortBy} currentSortDir={sortDir} onSort={handleSort} />
+                  </th>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground w-28">
+                    <SortableHeader
+                      label={view === "resolved" ? "Resolved" : "Last seen"}
+                      sortKey="last_seen"
+                      currentSortBy={sortBy}
+                      currentSortDir={sortDir}
+                      onSort={handleSort}
+                    />
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y">
@@ -1024,20 +1145,11 @@ export default function ClustersFeed({
                         />
                       </td>
                     )}
-                    <td className="px-3 py-3">{priorityBadge(cluster.priority_score)}</td>
                     <td className="px-3 py-3 max-w-0">
-                      <p className="font-medium truncate">{cluster.title}</p>
-                      <p className="text-xs text-muted-foreground truncate mt-0.5">{cluster.root_cause}</p>
-                    </td>
-                    <td className="px-3 py-3 text-muted-foreground tabular-nums">{cluster.event_count}</td>
-                    <td className="px-3 py-3 text-muted-foreground tabular-nums">{cluster.affected_users}</td>
-                    <td className="px-3 py-3 text-muted-foreground">
-                      {view === "resolved" ? timeAgo(cluster.updated_at) : timeAgo(cluster.last_seen)}
-                    </td>
-                    <td className="px-3 py-3">
-                      <div className="flex items-center gap-1.5">
-                        {statusBadge(cluster.status)}
-                        {cluster.status === "resolved" && cluster.github_issue_number && (
+                      <div className="flex items-center gap-2 min-w-0">
+                        <PriorityIcon score={cluster.priority_score} />
+                        <span className="font-medium truncate">{cluster.title}</span>
+                        {cluster.github_issue_number && (
                           <Tooltip>
                             <TooltipTrigger asChild>
                               <a
@@ -1045,35 +1157,59 @@ export default function ClustersFeed({
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 onClick={(e) => e.stopPropagation()}
-                                className="text-muted-foreground/60 hover:text-foreground transition-colors"
+                                className="shrink-0 text-muted-foreground/50 hover:text-foreground transition-colors"
                               >
                                 <IconBrandGithub className="size-3.5" />
                               </a>
                             </TooltipTrigger>
                             <TooltipContent side="top">
-                              Resolved by closing GitHub #{cluster.github_issue_number}
+                              {cluster.status === "resolved"
+                                ? `Resolved via GitHub #${cluster.github_issue_number}`
+                                : `GitHub #${cluster.github_issue_number}`}
                             </TooltipContent>
                           </Tooltip>
                         )}
                       </div>
                     </td>
-                    <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
-                      {cluster.github_issue_number && cluster.status !== "resolved" && (
-                        <a
-                          href={cluster.github_issue_url ?? "#"}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          title={`GitHub #${cluster.github_issue_number}`}
-                          className="text-muted-foreground hover:text-foreground transition-colors"
-                        >
-                          <IconBrandGithub className="size-4" />
-                        </a>
-                      )}
+                    <td className="px-3 py-3 text-muted-foreground tabular-nums">{cluster.event_count}</td>
+                    <td className="px-3 py-3 text-muted-foreground tabular-nums">{cluster.affected_users}</td>
+                    <td className="px-3 py-3 text-muted-foreground">
+                      {view === "resolved" ? timeAgo(cluster.updated_at) : timeAgo(cluster.last_seen)}
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+
+            {/* Pagination footer */}
+            {totalPages > 1 && (
+              <div className="flex items-center justify-between px-3 py-2 border-t bg-muted/20">
+                <p className="text-xs text-muted-foreground">
+                  {pageStart + 1}–{Math.min(pageStart + PAGE_SIZE, totalItems)} of {totalItems}
+                </p>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    disabled={clampedPage === 1}
+                    className="p-1 rounded border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    aria-label="Previous page"
+                  >
+                    <IconChevronLeft className="size-3.5" />
+                  </button>
+                  <span className="text-xs text-muted-foreground px-2 tabular-nums">
+                    {clampedPage} / {totalPages}
+                  </span>
+                  <button
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                    disabled={clampedPage === totalPages}
+                    className="p-1 rounded border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    aria-label="Next page"
+                  >
+                    <IconChevronRight className="size-3.5" />
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
