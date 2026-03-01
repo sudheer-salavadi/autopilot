@@ -734,8 +734,34 @@ export default function ClustersFeed({
   const [activeCluster, setActiveCluster]   = useState<Cluster | null>(null);
   const [crossChannel, setCrossChannel]     = useState(initialCrossChannel);
   const [togglingMode, setTogglingMode]     = useState(false);
+  const [detailWidth, setDetailWidth]       = useState(420);
+  const [isDragging, setIsDragging]         = useState(false);
+  const dragState = useRef<{ startX: number; startWidth: number } | null>(null);
   const isXl = useIsXl();
   const api = apiClient();
+
+  const MIN_DETAIL = 280;
+  const MAX_DETAIL = 760;
+
+  function handleDragStart(e: React.MouseEvent) {
+    e.preventDefault();
+    dragState.current = { startX: e.clientX, startWidth: detailWidth };
+    setIsDragging(true);
+
+    function onMove(e: MouseEvent) {
+      if (!dragState.current) return;
+      const delta = dragState.current.startX - e.clientX;
+      setDetailWidth(Math.max(MIN_DETAIL, Math.min(MAX_DETAIL, dragState.current.startWidth + delta)));
+    }
+    function onUp() {
+      dragState.current = null;
+      setIsDragging(false);
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    }
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }
 
   // Reset selection when view/filters change
   useEffect(() => { setSelected(new Set()); setActiveCluster(null); }, [view, filterSource, minScore]);
@@ -791,7 +817,7 @@ export default function ClustersFeed({
   const hasActiveFilters = filterSource !== "" || minScore > 0;
 
   return (
-    <div className="flex items-start gap-4">
+    <div className={`flex items-start${isDragging ? " select-none" : ""}`}>
       {/* left column */}
       <div className="flex-1 min-w-0 space-y-3">
 
@@ -1031,16 +1057,30 @@ export default function ClustersFeed({
 
       </div>{/* end left column */}
 
-      {/* right column — inline panel on xl */}
+      {/* right column — resizable inline panel on xl */}
       {isXl && activeCluster && (
-        <aside className="w-[420px] shrink-0 border-l flex flex-col sticky top-[calc(3rem+1px)] max-h-[calc(100vh-3rem-1px)] overflow-hidden -mr-6">
-          <ClusterDetail
-            cluster={activeCluster}
-            slug={slug}
-            onClose={() => setActiveCluster(null)}
-            onClusterUpdated={(patch) => handleClusterUpdated(activeCluster.id, patch)}
-          />
-        </aside>
+        <>
+          {/* drag handle */}
+          <div
+            onMouseDown={handleDragStart}
+            className="w-3 shrink-0 self-stretch flex items-center justify-center cursor-col-resize group"
+          >
+            <div className={`w-px h-full transition-colors ${isDragging ? "bg-foreground/40" : "bg-border group-hover:bg-foreground/30"}`} />
+          </div>
+
+          {/* detail panel */}
+          <aside
+            style={{ width: detailWidth }}
+            className="shrink-0 flex flex-col sticky top-[calc(3rem+1px)] max-h-[calc(100vh-3rem-1px)] overflow-hidden -mr-6"
+          >
+            <ClusterDetail
+              cluster={activeCluster}
+              slug={slug}
+              onClose={() => setActiveCluster(null)}
+              onClusterUpdated={(patch) => handleClusterUpdated(activeCluster.id, patch)}
+            />
+          </aside>
+        </>
       )}
 
       {/* sheet overlay — small screens only */}
