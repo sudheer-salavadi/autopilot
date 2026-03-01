@@ -6,8 +6,8 @@ from pydantic import BaseModel, field_validator
 class GithubConfigOut(BaseModel):
     project_id: uuid.UUID
     repo: str | None
-    has_token: bool           # True if a PAT is stored; never expose raw value
-    has_webhook_secret: bool  # True if a webhook secret is stored
+    installation_id: int | None
+    is_installed: bool          # True when installation_id is set
     autopilot_enabled: bool
     autopilot_min_score: float
 
@@ -16,8 +16,7 @@ class GithubConfigOut(BaseModel):
 
 class GithubConfigUpdate(BaseModel):
     repo: str | None = None
-    token: str | None = None           # only sent when rotating; None = keep existing
-    webhook_secret: str | None = None  # only sent when rotating
+    installation_id: int | None = None  # set by callback after GitHub App install
     autopilot_enabled: bool | None = None
     autopilot_min_score: float | None = None
 

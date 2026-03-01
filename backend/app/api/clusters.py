@@ -137,8 +137,8 @@ async def update_cluster_status(
 
     cluster.status = body.status
 
-    # When resolving: if a GitHub issue is linked and we have a token, close it too
-    if body.status == ClusterStatus.resolved and cluster.github_issue_number:
+    # Sync GitHub issue state when status changes to/from resolved
+    if cluster.github_issue_number:
         from app.models.github_config import ProjectGithubConfig
         from app.services import github as gh
         gh_result = await db.execute(
@@ -147,13 +147,20 @@ async def update_cluster_status(
             )
         )
         gh_config = gh_result.scalar_one_or_none()
-        if gh_config and gh_config.token and gh_config.repo:
+        if gh_config and gh_config.installation_id and gh_config.repo:
             try:
-                await gh.close_issue(
-                    token=gh_config.token,
-                    repo=gh_config.repo,
-                    issue_number=cluster.github_issue_number,
-                )
+                if body.status == ClusterStatus.resolved:
+                    await gh.close_issue(
+                        repo=gh_config.repo,
+                        issue_number=cluster.github_issue_number,
+                        installation_id=gh_config.installation_id,
+                    )
+                elif body.status == ClusterStatus.open:
+                    await gh.reopen_issue(
+                        repo=gh_config.repo,
+                        issue_number=cluster.github_issue_number,
+                        installation_id=gh_config.installation_id,
+                    )
             except Exception:
                 pass  # Non-blocking — status is still updated locally
 

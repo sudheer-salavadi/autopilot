@@ -3,6 +3,7 @@ import uuid
 from datetime import datetime, timezone
 
 from pgvector.sqlalchemy import Vector
+import sqlalchemy as sa
 from sqlalchemy import DateTime, Enum, Float, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -57,6 +58,9 @@ class Cluster(Base):
         nullable=True,
     )
     regression_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # PM-quality insight: cross-source synthesis + owner + recommended action
+    pm_insight: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
 
     # GitHub issue filed for this cluster
     github_issue_number: Mapped[int | None] = mapped_column(Integer, nullable=True)

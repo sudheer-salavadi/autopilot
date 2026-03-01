@@ -33,6 +33,8 @@ class ClusterOut(BaseModel):
     status: ClusterStatus
     created_at: datetime
     updated_at: datetime
+    # PM synthesis
+    pm_insight: str | None = None
     # Regression / GitHub fields
     parent_cluster_id: uuid.UUID | None = None
     regression_count: int = 0

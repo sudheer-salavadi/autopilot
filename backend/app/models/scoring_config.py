@@ -22,6 +22,7 @@ class ProjectScoringConfig(Base):
     simulate_stripe: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     simulate_sentry: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     simulate_fullstory: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    simulate_zendesk: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     # Relationships
     project: Mapped["Project"] = relationship("Project", back_populates="scoring_config")  # noqa: F821

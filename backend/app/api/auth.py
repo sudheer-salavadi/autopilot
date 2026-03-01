@@ -50,6 +50,13 @@ async def me(current_user: User = Depends(get_current_user)):
     }
 
 
+@router.get("/logout")
+async def logout_get():
+    response = RedirectResponse(url=f"{settings.FRONTEND_URL}/", status_code=302)
+    response.delete_cookie("ap_session")
+    return response
+
+
 @router.post("/logout")
 async def logout(response: Response):
     response.delete_cookie("ap_session")

@@ -25,6 +25,12 @@ class Settings(BaseSettings):
     FRONTEND_URL: str = "http://localhost:3000"
     NEXT_PUBLIC_WORKOS_REDIRECT_URI: str = "http://localhost:8000/api/auth/callback"
 
+    # GitHub App (optional — PAT-based fallback still works without these)
+    GITHUB_APP_ID: str = ""
+    GITHUB_APP_PRIVATE_KEY: str = ""   # full PEM, \n-escaped in .env
+    GITHUB_APP_WEBHOOK_SECRET: str = ""
+    GITHUB_APP_SLUG: str = ""          # for install URL: github.com/apps/{slug}/installations/new
+
     # JWT
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRE_SECONDS: int = 60 * 60 * 24 * 7  # 7 days

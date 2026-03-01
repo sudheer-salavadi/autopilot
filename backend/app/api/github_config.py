@@ -1,4 +1,4 @@
-"""GitHub integration config + manual issue creation endpoints."""
+"""GitHub App integration config + manual issue creation endpoints."""
 import uuid
 from collections import Counter
 
@@ -38,8 +38,8 @@ def _to_out(config: ProjectGithubConfig) -> GithubConfigOut:
     return GithubConfigOut(
         project_id=config.project_id,
         repo=config.repo,
-        has_token=config.token is not None,
-        has_webhook_secret=config.webhook_secret is not None,
+        installation_id=config.installation_id,
+        is_installed=config.installation_id is not None,
         autopilot_enabled=config.autopilot_enabled,
         autopilot_min_score=config.autopilot_min_score,
     )
@@ -65,12 +65,10 @@ async def update_github_config(
     project, _, _ = deps
     config = await _get_or_create_config(project.id, db)
 
+    if body.installation_id is not None:
+        config.installation_id = body.installation_id
     if body.repo is not None:
         config.repo = body.repo or None
-    if body.token is not None:
-        config.token = body.token or None
-    if body.webhook_secret is not None:
-        config.webhook_secret = body.webhook_secret or None
     if body.autopilot_enabled is not None:
         config.autopilot_enabled = body.autopilot_enabled
     if body.autopilot_min_score is not None:
@@ -81,22 +79,45 @@ async def update_github_config(
     return _to_out(config)
 
 
+@router.get("/github-config/repos")
+async def list_github_repos(
+    deps=Depends(require_project_member),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return repos accessible to the installed GitHub App."""
+    project, _, _ = deps
+    config = await _get_or_create_config(project.id, db)
+
+    if not config.installation_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="GitHub App is not installed for this project",
+        )
+
+    try:
+        repos = await gh.get_accessible_repos(config.installation_id)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"GitHub API error: {exc}")
+
+    return repos
+
+
 @router.post("/github-config/verify")
 async def verify_github_config(
     deps=Depends(require_project_owner),
     db: AsyncSession = Depends(get_db),
 ):
-    """Test that the stored token can access the configured repo."""
+    """Test that the installation can access the configured repo."""
     project, _, _ = deps
     config = await _get_or_create_config(project.id, db)
 
-    if not config.token or not config.repo:
+    if not config.installation_id or not config.repo:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Repo and token must both be configured before verifying",
+            detail="Repo and GitHub App installation must both be configured before verifying",
         )
 
-    ok, message = await gh.verify_token(config.token, config.repo)
+    ok, message = await gh.verify_installation(config.installation_id, config.repo)
     return {"ok": ok, "message": message}
 
 
@@ -128,10 +149,10 @@ async def create_github_issue(
 
     # Load GitHub config
     gh_config = await _get_or_create_config(project.id, db)
-    if not gh_config.token or not gh_config.repo:
+    if not gh_config.installation_id or not gh_config.repo:
         raise HTTPException(
             status_code=422,
-            detail="GitHub repo and token must be configured in Settings → GitHub",
+            detail="GitHub App must be installed and repo selected in Settings → GitHub",
         )
 
     # Count events by source
@@ -168,11 +189,11 @@ async def create_github_issue(
 
     try:
         issue = await gh.create_issue(
-            token=gh_config.token,
             repo=gh_config.repo,
             title=f"[Autopilot] {cluster.title}",
             body=body,
             labels=["autopilot"],
+            installation_id=gh_config.installation_id,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"GitHub API error: {exc}")

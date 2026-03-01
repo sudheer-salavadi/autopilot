@@ -3,12 +3,14 @@ import hashlib
 import hmac
 import json
 import time
+from datetime import datetime, timezone
 
 import stripe
 from fastapi import HTTPException, Request, status
 
 _SENTRY_MAX_AGE_SECONDS = 300     # 5 minutes
 _FULLSTORY_MAX_AGE_SECONDS = 300  # 5 minutes
+_ZENDESK_MAX_AGE_SECONDS = 300    # 5 minutes
 
 
 async def verify_stripe_webhook(request: Request, secret: str) -> dict:
@@ -118,6 +120,51 @@ async def verify_fullstory_webhook(request: Request, secret: str) -> dict:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid FullStory signature",
+        )
+
+    return json.loads(raw_body)
+
+
+async def verify_zendesk_webhook(request: Request, secret: str) -> dict:
+    """
+    Verify Zendesk webhook signature.
+    Header X-Zendesk-Webhook-Signature: Base64(HMAC-SHA256(signing_secret, timestamp + raw_body))
+    Header X-Zendesk-Webhook-Signature-Timestamp: ISO-8601 string (e.g. 2024-01-15T10:00:00Z)
+    Must use raw bytes — never parse JSON first.
+    """
+    raw_body = await request.body()
+    sig_header = request.headers.get("x-zendesk-webhook-signature", "")
+    timestamp_header = request.headers.get("x-zendesk-webhook-signature-timestamp", "")
+
+    if not sig_header or not timestamp_header:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing Zendesk signature headers",
+        )
+
+    # Replay protection — Zendesk uses ISO-8601 timestamp
+    try:
+        event_ts = datetime.fromisoformat(
+            timestamp_header.replace("Z", "+00:00")
+        ).timestamp()
+        if abs(time.time() - event_ts) > _ZENDESK_MAX_AGE_SECONDS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Zendesk webhook timestamp too old",
+            )
+    except (ValueError, AttributeError):
+        pass  # Malformed timestamp — let the signature check catch it
+
+    # Message = timestamp_string (as bytes) + raw_body
+    message = timestamp_header.encode() + raw_body
+    expected = base64.b64encode(
+        hmac.new(secret.encode(), message, hashlib.sha256).digest()
+    ).decode()
+
+    if not hmac.compare_digest(expected, sig_header):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Zendesk signature",
         )
 
     return json.loads(raw_body)

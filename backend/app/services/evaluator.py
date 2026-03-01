@@ -333,6 +333,147 @@ Respond only with JSON:
         cluster.embedding = embedding
 
 
+async def _generate_pm_insight(
+    cluster: Cluster,
+    events: list[Event],
+    config: ProjectScoringConfig,
+    client,
+    model: str,
+    is_local: bool,
+) -> None:
+    """Generate a PM-quality insight: cross-source synthesis, owner, and recommended action.
+
+    Stored on cluster.pm_insight. Runs after _regenerate_insight so title/root_cause
+    are already accurate. Non-blocking — silently skips on any LLM failure.
+    """
+    from collections import Counter
+    from app.services.sources.stripe import POSITIVE_TYPES as _POSITIVE_STRIPE_TYPES
+
+    negative = [e for e in events if _is_negative_signal(e)]
+    if not negative:
+        return
+
+    # Build source breakdown with human-readable signal counts
+    source_counts = Counter(e.source for e in negative)
+    source_lines: list[str] = []
+
+    # Stripe: compute actual revenue at risk
+    stripe_events = [e for e in negative if e.source == "stripe"]
+    if stripe_events:
+        AT_RISK_TYPES = ("failed", "refund", "past_due", "disputed", "unpaid", "void")
+        revenue_cents = sum(
+            (e.payload.get("data", {}).get("object", {}).get("amount")
+             or e.payload.get("data", {}).get("object", {}).get("amount_due") or 0)
+            for e in stripe_events
+            if any(t in e.event_type for t in AT_RISK_TYPES)
+        )
+        revenue_str = f"${revenue_cents / 100:,.0f} at risk" if revenue_cents else f"{len(stripe_events)} events"
+        source_lines.append(f"- Stripe: {len(stripe_events)} payment events ({revenue_str})")
+
+    if source_counts.get("sentry"):
+        # Pull top error type for context
+        exc_types = []
+        for e in negative:
+            if e.source != "sentry":
+                continue
+            exc_vals = (e.payload.get("data", {}).get("event", {})
+                        .get("exception", {}).get("values", []))
+            if exc_vals:
+                exc_types.append(exc_vals[-1].get("type", ""))
+        top_error = Counter(t for t in exc_types if t).most_common(1)
+        error_str = f" — {top_error[0][0]}" if top_error else ""
+        source_lines.append(f"- Sentry: {source_counts['sentry']} errors{error_str}")
+
+    if source_counts.get("fullstory"):
+        frustrations = []
+        for e in negative:
+            if e.source != "fullstory":
+                continue
+            fr = e.payload.get("data", {}).get("frustration_type") or e.event_type
+            if fr and fr not in ("none", "session_start", "session_end"):
+                frustrations.append(fr)
+        top_fr = Counter(frustrations).most_common(1)
+        fr_str = f" — {top_fr[0][0].replace('_', ' ')}" if top_fr else ""
+        source_lines.append(f"- FullStory: {source_counts['fullstory']} sessions{fr_str}")
+
+    if source_counts.get("zendesk"):
+        priorities = []
+        for e in negative:
+            if e.source != "zendesk":
+                continue
+            p = (e.payload.get("detail", {}) or {}).get("priority", "")
+            if p:
+                priorities.append(p.lower())
+        top_p = Counter(priorities).most_common(1)
+        p_str = f" — {top_p[0][0]} priority" if top_p else ""
+        source_lines.append(f"- Zendesk: {source_counts['zendesk']} tickets{p_str}")
+
+    # Cross-source identity overlap
+    identity_sources: dict[str, set[str]] = {}
+    for e in negative:
+        p = e.payload
+        uid = ""
+        if e.source == "stripe":
+            uid = str(p.get("data", {}).get("object", {}).get("customer") or
+                      p.get("data", {}).get("object", {}).get("metadata", {}).get("email") or "")
+        elif e.source == "sentry":
+            uid = str(p.get("data", {}).get("event", {}).get("user", {}).get("email") or "")
+        elif e.source == "fullstory":
+            uid = str(p.get("data", {}).get("user_email") or p.get("data", {}).get("user_id") or "")
+        elif e.source == "zendesk":
+            uid = str((p.get("detail", {}) or {}).get("external_id") or
+                      (p.get("detail", {}) or {}).get("requester_id") or "")
+        if uid and uid not in ("unknown", "null", "undefined"):
+            if uid not in identity_sources:
+                identity_sources[uid] = set()
+            identity_sources[uid].add(e.source)
+    cross_source_users = [uid for uid, srcs in identity_sources.items() if len(srcs) > 1]
+    cross_hint = (
+        f"\n{len(cross_source_users)} user(s) appear in signals from multiple tools "
+        f"(confirmed blast radius)."
+        if cross_source_users else ""
+    )
+
+    sources_active = [s for s in ["stripe", "sentry", "fullstory", "zendesk"] if source_counts.get(s)]
+    user_str = f"{cluster.affected_users} user{'s' if cluster.affected_users != 1 else ''}"
+    signal_block = "\n".join(source_lines)
+
+    prompt = f"""You are a senior product manager writing a concise incident insight.
+
+Cluster: "{cluster.title}"
+Root cause: "{cluster.root_cause}"
+
+Signal breakdown ({user_str} affected):
+{signal_block}{cross_hint}
+
+Write a PM insight in exactly 2-3 sentences that:
+1. Connects what happened across the signals (the user journey from error → frustration → complaint)
+2. States the owner clearly: "Engineering:" for code/infra bugs, "CS:" for customer-side payment issues, "Product:" for UX/flow problems
+3. Gives one specific, actionable next step
+
+Be direct. No filler. Name the specific component, page, or error type if the data supports it.
+
+Respond only with JSON: {{"insight": "<2-3 sentences>"}}"""
+
+    kwargs = {} if is_local else {"response_format": {"type": "json_object"}}
+    try:
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": "You are a senior PM writing concise incident insights. Respond only with JSON."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.2,
+            **kwargs,
+        )
+        result = _parse_json(response.choices[0].message.content)
+        insight = result.get("insight", "")
+        if insight:
+            cluster.pm_insight = insight[:1000]
+    except Exception:
+        pass  # Non-blocking — cluster works fine without pm_insight
+
+
 def _rescore_cluster(cluster: Cluster, config: ProjectScoringConfig, events: list[Event]) -> None:
     """Recompute revenue/frequency/ux/priority scores on the cluster in-place."""
     # Revenue at risk: only count Stripe events that represent lost/at-risk money.
@@ -590,6 +731,11 @@ async def evaluate_project(project_id: uuid.UUID, db: AsyncSession) -> dict:
             await _regenerate_insight(
                 cluster, cluster_events, client, model, is_local, cross_channel
             )
+            # Generate PM-quality synthesis: cross-source narrative + owner + action.
+            # Runs after _regenerate_insight so it has the final title/root_cause.
+            await _generate_pm_insight(
+                cluster, cluster_events, config, client, model, is_local
+            )
 
     await db.commit()
 
@@ -602,6 +748,133 @@ async def evaluate_project(project_id: uuid.UUID, db: AsyncSession) -> dict:
         "clusters_created": clusters_created,
         "clusters_updated": len(clusters_updated_ids) - clusters_created,
     }
+
+
+# ---------------------------------------------------------------------------
+# Stripe error code classification
+# ---------------------------------------------------------------------------
+#
+# Not every Stripe failure is engineering's problem. Before filing a GitHub
+# issue we classify the cluster's Stripe events to determine who should act.
+#
+# CUSTOMER_ERRORS — the card or bank rejected the charge for a customer-side
+#   reason.  Engineering cannot fix these.  The right owner is Customer Success
+#   (CS), whose playbook is:
+#     - insufficient_funds / account_closed: send a dunning email immediately;
+#       retry after 3/5/7 days via Stripe's Smart Retries or a manual retry
+#       schedule; escalate to account manager if MRR > threshold.
+#     - card_expired: trigger an automated "update your card" email sequence
+#       (Stripe has a built-in one); pause subscription after N days.
+#     - card_declined / do_not_honor / restricted_card: ask the customer to
+#       contact their bank or try a different card.
+#     - lost_card / stolen_card: cancel the card on file immediately; contact
+#       customer to re-add a valid card; flag for fraud review if pattern repeats.
+#     - fraudulent / pickup_card: freeze the account, flag for the Finance /
+#       Risk team, do NOT retry — retrying a card flagged fraudulent worsens
+#       Stripe's fraud score for your account.
+#
+# TODO: Route CUSTOMER_ERRORS to a CS alert channel (e.g. Slack webhook,
+#   Intercom conversation, or an internal "billing alerts" view in Autopilot)
+#   rather than filing a GitHub issue.  The cluster should still be visible
+#   in the Issues feed with an "Owner: CS" badge so nothing is silently dropped.
+#
+# INFRASTRUCTURE_ERRORS — failures caused by a bug or misconfiguration in
+#   your own code or Stripe integration.  These belong in GitHub.
+#
+# Codes not in either list (e.g. new Stripe codes) default to filing a GitHub
+# issue so nothing slips through silently.
+# ---------------------------------------------------------------------------
+
+_CUSTOMER_ERRORS: frozenset[str] = frozenset({
+    # Funds / account
+    "insufficient_funds",
+    "account_closed",
+    "debit_not_authorized",
+    # Card lifecycle
+    "card_expired",
+    "expired_card",
+    # Generic declines — customer or bank side
+    "card_declined",
+    "do_not_honor",
+    "restricted_card",
+    "card_not_supported",
+    "currency_not_supported",
+    "card_velocity_exceeded",
+    # Lost / stolen — CS + Finance action
+    "lost_card",
+    "stolen_card",
+    # Fraud — Finance / Risk action, never retry
+    "fraudulent",
+    "pickup_card",
+    "pickup_card_other",
+})
+
+_INFRASTRUCTURE_ERRORS: frozenset[str] = frozenset({
+    # Your code sent a bad request to Stripe
+    "invalid_request_error",
+    "parameter_invalid_empty",
+    "parameter_invalid_integer",
+    "parameter_missing",
+    "resource_missing",
+    # Stripe couldn't reach your server (webhook delivery failures)
+    "api_connection_error",
+    "api_error",
+    # Rate limiting — your integration needs backoff / queue
+    "rate_limit",
+    "lock_timeout",
+    # Idempotency misuse
+    "idempotency_key_in_use",
+})
+
+
+def _stripe_owner(failure_code: str | None) -> str:
+    """Return 'cs', 'engineering', or 'unknown' for a Stripe decline code."""
+    if not failure_code:
+        return "unknown"
+    code = failure_code.lower()
+    if code in _CUSTOMER_ERRORS:
+        return "cs"
+    if code in _INFRASTRUCTURE_ERRORS:
+        return "engineering"
+    return "unknown"  # file GitHub issue by default — don't silently drop
+
+
+def _cluster_is_engineering_actionable(events: list[Event]) -> bool:
+    """Return True if at least one event in the cluster is engineering-owned.
+
+    A cluster mixing infrastructure errors and customer errors (e.g. a bad
+    API call that then surfaces as a card_declined) is still engineering-owned.
+    A cluster made up entirely of customer-side Stripe errors should not
+    create GitHub noise.
+    """
+    stripe_events = [e for e in events if e.source == "stripe"]
+    non_stripe_events = [e for e in events if e.source != "stripe"]
+
+    # Non-Stripe sources (Sentry errors, FullStory rage-clicks) are always
+    # engineering signals — a broken button or a server exception is fixable.
+    if non_stripe_events:
+        return True
+
+    # No events at all — default to filing
+    if not stripe_events:
+        return True
+
+    # Check each Stripe event's decline code
+    for event in stripe_events:
+        payload = event.payload or {}
+        # Stripe wraps the error under data.object.failure_code or
+        # last_payment_error.code depending on the event type
+        failure_code = (
+            payload.get("data", {}).get("object", {}).get("failure_code")
+            or payload.get("data", {}).get("object", {})
+                .get("last_payment_error", {}).get("code")
+        )
+        if _stripe_owner(failure_code) != "cs":
+            # At least one event is engineering or unknown — file the issue
+            return True
+
+    # Every Stripe event in this cluster is a customer-side error
+    return False
 
 
 async def _autopilot_github(
@@ -625,7 +898,7 @@ async def _autopilot_github(
     if (
         not gh_config
         or not gh_config.autopilot_enabled
-        or not gh_config.token
+        or not gh_config.installation_id
         or not gh_config.repo
     ):
         return
@@ -653,13 +926,22 @@ async def _autopilot_github(
         ):
             continue
 
-        # Count events by source for the issue body
+        # Load full events — needed for both actionability check and source counts
         events_result = await db.execute(
-            select(Event.source)
+            select(Event)
             .join(ClusterEvent, ClusterEvent.event_id == Event.id)
             .where(ClusterEvent.cluster_id == cluster_id)
         )
-        source_counts = dict(Counter(row[0] for row in events_result.all()))
+        cluster_events = events_result.scalars().all()
+        source_counts = dict(Counter(e.source for e in cluster_events))
+
+        # Skip GitHub filing if every event in the cluster is a customer-side
+        # Stripe error (insufficient_funds, card_expired, etc.).  Engineering
+        # cannot fix these — they belong in a CS alert, not a GitHub issue.
+        # TODO: replace this early-continue with a CS routing call once the
+        # alert channel is implemented (Slack / Intercom / internal feed).
+        if not _cluster_is_engineering_actionable(list(cluster_events)):
+            continue
 
         # Regression context
         is_regression = cluster.parent_cluster_id is not None
@@ -683,10 +965,10 @@ async def _autopilot_github(
                             f"[View cluster →]({settings.FRONTEND_URL}/projects/{project_slug}/clusters/{cluster.id})"
                         )
                         await gh.reopen_issue(
-                            token=gh_config.token,
                             repo=gh_config.repo,
                             issue_number=parent.github_issue_number,
                             comment=comment,
+                            installation_id=gh_config.installation_id,
                         )
                         # Link the regression cluster to the reopened issue
                         cluster.github_issue_number = parent.github_issue_number
@@ -709,11 +991,11 @@ async def _autopilot_github(
 
         try:
             issue = await gh.create_issue(
-                token=gh_config.token,
                 repo=gh_config.repo,
                 title=f"[Autopilot] {cluster.title}",
                 body=body,
                 labels=["autopilot"],
+                installation_id=gh_config.installation_id,
             )
             cluster.github_issue_number = issue["number"]
             cluster.github_issue_url = issue["html_url"]

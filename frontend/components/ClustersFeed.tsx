@@ -1,13 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { IconArrowDown, IconArrowUp, IconArrowsUpDown, IconBrandGithub, IconCheck, IconChevronDown, IconChevronLeft, IconChevronRight, IconChevronUp, IconChevronsDown, IconChevronsUp, IconExternalLink, IconFilter, IconMinus, IconRefresh, IconSearch, IconX } from "@tabler/icons-react";
+import { IconArrowDown, IconArrowUp, IconArrowsUpDown, IconBrandGithub, IconCheck, IconChevronDown, IconChevronLeft, IconChevronRight, IconChevronUp, IconChevronsDown, IconChevronsUp, IconExternalLink, IconHelpCircle, IconMinus, IconRefresh, IconSearch, IconX } from "@tabler/icons-react";
 import { JsonBlock } from "@/components/JsonBlock";
 import { type Cluster, type ClusterEvent, type ClustersPage, type ClustersParams, useClusters } from "@/lib/hooks/useClusters";
 import { apiClient } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/switch";
 import {
   Sheet,
   SheetContent,
@@ -20,6 +19,59 @@ import {
 } from "@/components/ui/tooltip";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * Highlights code-like tokens in a root_cause string:
+ *   `backtick-wrapped`  → monospace chip
+ *   /url/paths          → muted monospace
+ *   snake_case          → monospace chip
+ *   dot.notation        → monospace chip
+ */
+function formatRootCause(text: string): React.ReactNode {
+  // Match in priority order: backtick > full URL > /path > currency > snake_case > dot.notation
+  const pattern = /(`[^`]+`|https?:\/\/[^\s,;]+|\/[a-zA-Z][a-zA-Z0-9/_-]+|\$[\d,]+(?:\.\d{1,2})?|\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b|\b[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]+)+\b)/g;
+
+  const parts: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let key = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index));
+    }
+
+    const token = match[0];
+    const isPath = token.startsWith("/") || token.startsWith("http");
+    const isCurrency = token.startsWith("$");
+    const display = token.startsWith("`") ? token.slice(1, -1) : token;
+
+    if (isPath) {
+      parts.push(
+        <span key={key++} className="font-mono  bg-muted/80 text-foreground/80 px-1 py-0.5 rounded">
+          {display}
+        </span>
+      );
+    } else if (isCurrency) {
+      parts.push(
+        <span key={key++} className="font-mono  font-semibold px-1 py-0.5 rounded bg-amber-100 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300">
+          {display}
+        </span>
+      );
+    } else {
+      parts.push(
+        <code key={key++} className="font-mono bg-muted px-1 py-0.5 rounded text-foreground/90">
+          {display}
+        </code>
+      );
+    }
+
+    lastIndex = match.index + token.length;
+  }
+
+  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
+  return parts.length > 1 ? parts : text;
+}
 
 type SeverityLevel = "Critical" | "High" | "Medium" | "Low" | "Lowest";
 
@@ -148,7 +200,7 @@ function IndeterminateCheckbox({
 // ── source icon ───────────────────────────────────────────────────────────────
 
 function SourceIcon({ source }: { source: string }) {
-  const known = ["stripe", "sentry", "fullstory"];
+  const known = ["stripe", "sentry", "fullstory", "zendesk"];
   if (!known.includes(source)) return null;
   return (
     <img
@@ -177,20 +229,28 @@ function CountBadge({ count, tooltip }: { count: number; tooltip: string }) {
 
 // ── correlating attributes ────────────────────────────────────────────────────
 
-function dig(obj: unknown, ...keys: string[]): string {
-  let cur: unknown = obj;
-  for (const k of keys) {
-    if (cur == null || typeof cur !== "object") return "";
-    cur = (cur as Record<string, unknown>)[k];
+// Strip query string + hash so /checkout?session=abc and /checkout?session=def
+// both map to /checkout and can cross-match between Sentry and FullStory.
+function normalizeUrl(raw: string): string {
+  if (!raw) return raw;
+  try {
+    const u = new URL(raw);
+    return u.origin + u.pathname;
+  } catch {
+    return raw; // relative paths or non-URL strings — return as-is
   }
-  return typeof cur === "string" ? cur : "";
 }
 
 interface CrossMatch {
   value: string;
   sources: string[]; // deduplicated sources where this value was seen
   count: number;
+  type: "identity" | "url";
 }
+
+// Stripe customer IDs always start with cus_ — detect by value format so any tool
+// that emits them (Sentry tags, FullStory custom vars, DataDog, etc.) routes correctly
+const STRIPE_CUS_RE = /^cus_[a-zA-Z0-9_]+$/;
 
 interface Correlations {
   // Same value observed in 2+ distinct sources — the strongest signal
@@ -215,15 +275,37 @@ function computeCorrelations(payloads: ClusterEvent[]): Correlations {
     else map.set(v, { sources: new Set([source]), count: 1 });
   }
 
+  // Route any identity value: cus_xxx format → always "stripe" regardless of which tool emitted it.
+  // Emails are lowercased so admin@Company.com and admin@company.com pool together.
+  function trackIdentity(value: string, defaultSource: string) {
+    const v = value?.trim();
+    if (!v) return;
+    const src = STRIPE_CUS_RE.test(v) ? "stripe" : defaultSource;
+    track(identityMap, v.includes("@") ? v.toLowerCase() : v, src);
+  }
+
+  // Tag/field names used by various providers to carry Stripe customer IDs
+  const STRIPE_ID_FIELDS = new Set(["customer_id", "stripe_customer_id", "stripe_customer", "stripe_id"]);
+
+  const sentryMessages    = new Map<string, number>(); // exception messages — tight signal for dedup
+  const stripeErrors      = new Map<string, number>(); // Stripe failure codes — useful for CS routing
+  const ticketPriorities  = new Map<string, number>(); // Zendesk ticket priority values
+  const ticketTopics      = new Map<string, number>(); // Zendesk ticket tags
+
   for (const ev of payloads) {
     const p = ev.payload as Record<string, unknown>;
 
     if (ev.source === "stripe") {
       const obj  = (p?.data as Record<string, unknown>)?.object as Record<string, unknown>;
       const meta = obj?.metadata as Record<string, unknown> | undefined;
-      track(identityMap, String(obj?.customer  ?? ""), "stripe");
-      track(identityMap, String(meta?.email    ?? ""), "stripe");
-      track(identityMap, String(meta?.user_id  ?? ""), "stripe");
+      trackIdentity(String(obj?.customer  ?? ""), "stripe");
+      trackIdentity(String(meta?.email    ?? ""), "stripe");
+      trackIdentity(String(meta?.user_id  ?? ""), "stripe");
+
+      // Stripe failure / decline codes
+      const lpe     = (obj?.last_payment_error ?? obj?.last_setup_error) as Record<string, unknown> | undefined;
+      const errCode = String(lpe?.code ?? obj?.failure_code ?? "");
+      if (errCode) stripeErrors.set(errCode, (stripeErrors.get(errCode) ?? 0) + 1);
 
     } else if (ev.source === "sentry") {
       const data  = p?.data as Record<string, unknown>;
@@ -231,34 +313,105 @@ function computeCorrelations(payloads: ClusterEvent[]): Correlations {
       const issue = data?.issue as Record<string, unknown>;
       const user  = event?.user as Record<string, unknown>;
       const req   = event?.request as Record<string, unknown>;
-      const tags  = event?.tags as [string, string][] | undefined;
+      // Sentry webhooks send tags as array of tuples [["key","val"],…];
+      // some API formats use an object — handle both
+      const tagsRaw = event?.tags;
+      const tags: [string, string][] = Array.isArray(tagsRaw)
+        ? tagsRaw as [string, string][]
+        : tagsRaw && typeof tagsRaw === "object"
+          ? Object.entries(tagsRaw as Record<string, string>)
+          : [];
 
-      track(identityMap, String(user?.email    ?? ""), "sentry");
-      track(identityMap, String(user?.id       ?? ""), "sentry");
-      track(urlMap,      String(req?.url        ?? ""), "sentry");
+      trackIdentity(String(user?.email ?? ""), "sentry");
+      trackIdentity(String(user?.id    ?? ""), "sentry");
+      track(urlMap, normalizeUrl(String(req?.url ?? "")), "sentry");
 
       // culprit as URL fallback
       const culprit = String(issue?.culprit ?? "");
-      if (!req?.url && culprit.startsWith("http")) track(urlMap, culprit, "sentry");
+      if (!req?.url && culprit.startsWith("http")) track(urlMap, normalizeUrl(culprit), "sentry");
 
-      // customer_id from Sentry tags array
+      // Sentry tags: extract known Stripe ID field names; trackIdentity routes cus_xxx → "stripe"
+      for (const [k, v] of tags) {
+        if (STRIPE_ID_FIELDS.has(k) && v) trackIdentity(v, "sentry");
+      }
+
+      // Exception chain: Sentry stores innermost (root cause) last, outermost (wrapper) first
+      const excVals = ((event?.exception as Record<string, unknown>)?.values as Record<string, unknown>[]) ?? [];
+      const rootExc = excVals[excVals.length - 1]; // last = actual root cause
+      const errType = String(rootExc?.type  ?? "");
+      const errMsg  = String(rootExc?.value ?? "");
+      if (errType) errorTypes.set(errType, (errorTypes.get(errType) ?? 0) + 1);
+      // Cap message length — long values are often stack-trace noise, not a stable signal
+      if (errMsg && errMsg.length <= 120) {
+        sentryMessages.set(errMsg, (sentryMessages.get(errMsg) ?? 0) + 1);
+      }
+
+    } else if (ev.source === "zendesk") {
+      // Real Zendesk schema: all ticket fields are in payload.detail (flat object)
+      const detail = p?.detail as Record<string, unknown>;
+      // external_id is the developer-set app user_id — the real cross-source hook.
+      // When a developer sets ticket.requester.external_id to their app's user_id,
+      // this will match against the same user_id seen in Stripe/Sentry payloads.
+      const extId = String(detail?.external_id ?? "");
+      if (extId && extId !== "null" && extId !== "undefined") {
+        trackIdentity(extId, "zendesk");
+      }
+      // Zendesk-internal requester_id as a fallback (won't cross-correlate, but
+      // useful for grouping multiple tickets from the same Zendesk user)
+      const reqId = String(detail?.requester_id ?? "");
+      if (reqId && reqId !== "null" && reqId !== "undefined") {
+        trackIdentity(`zd:${reqId}`, "zendesk");
+      }
+      // Ticket priority as a UX severity signal
+      const priority = String(detail?.priority ?? "");
+      if (priority && priority !== "null" && priority !== "undefined") {
+        ticketPriorities.set(priority, (ticketPriorities.get(priority) ?? 0) + 1);
+      }
+      // Ticket tags — topic clustering (e.g. "billing", "checkout", "login")
+      const tags = detail?.tags as string[] | undefined;
       if (Array.isArray(tags)) {
-        for (const [k, v] of tags) {
-          if (k === "customer_id" && v) track(identityMap, v, "sentry");
+        for (const tag of tags) {
+          if (tag) ticketTopics.set(tag, (ticketTopics.get(tag) ?? 0) + 1);
         }
       }
 
-      const excVals = ((event?.exception as Record<string, unknown>)?.values as Record<string, unknown>[]) ?? [];
-      const errType = String(excVals[0]?.type ?? "");
-      if (errType) errorTypes.set(errType, (errorTypes.get(errType) ?? 0) + 1);
-
     } else { // fullstory
-      const data = p?.data as Record<string, unknown>;
-      track(identityMap, String(data?.user_email ?? ""), "fullstory");
-      track(identityMap, String(data?.user_id    ?? ""), "fullstory");
-      track(urlMap,      String(data?.page_url   ?? ""), "fullstory");
-      const fr = String(data?.frustration_type ?? "");
-      if (fr && fr !== "none") frustrations.set(fr, (frustrations.get(fr) ?? 0) + 1);
+      // Confirmed real FullStory webhook schema:
+      // { eventName, version, data: { pageInfo: { pageUrl }, sessionUrl, userUrl,
+      //   user_email, user_id, frustration_type, target_text, ... } }
+      // pageInfo.pageUrl + sessionUrl + userUrl are system fields present on every event.
+      // user_email, user_id, frustration_type are developer custom properties from FS.event().
+      const data     = p?.data as Record<string, unknown> | undefined;
+      const pageInfo = data?.pageInfo as Record<string, unknown> | undefined;
+
+      // Identity: developer-set user_email / user_id in data, fallback to userUrl path segment
+      const fsEmail = String(data?.user_email ?? data?.email ?? "");
+      trackIdentity(fsEmail, "fullstory");
+      const fsUserId = String(data?.user_id ?? "");
+      trackIdentity(fsUserId, "fullstory");
+      // userUrl system field: ends with /user/<userId> — extract ID for grouping
+      const userUrl = String(data?.userUrl ?? "");
+      if (userUrl) {
+        const urlParts = userUrl.split("/");
+        const fsInternalId = urlParts[urlParts.length - 1];
+        if (fsInternalId) trackIdentity(fsInternalId, "fullstory");
+      }
+
+      // Developer custom properties may carry a Stripe customer ID
+      for (const field of STRIPE_ID_FIELDS) {
+        const v = String(data?.[field] ?? "");
+        if (v) trackIdentity(v, "fullstory");
+      }
+
+      // Page URL: data.pageInfo.pageUrl (system field) → data.page_url (custom fallback)
+      const fsUrl = String(pageInfo?.pageUrl ?? data?.page_url ?? "");
+      track(urlMap, normalizeUrl(fsUrl), "fullstory");
+
+      // Frustration: data.frustration_type (developer custom property), or event name itself
+      const fr = String(data?.frustration_type ?? ev.event_type ?? "");
+      if (fr && fr !== "none" && fr !== "session_start" && fr !== "session_end") {
+        frustrations.set(fr, (frustrations.get(fr) ?? 0) + 1);
+      }
     }
   }
 
@@ -271,7 +424,7 @@ function computeCorrelations(payloads: ClusterEvent[]): Correlations {
   for (const [value, { sources, count }] of identityMap) {
     const srcList = [...sources];
     if (srcList.length >= 2) {
-      crossIds.push({ value, sources: srcList, count });
+      crossIds.push({ value, sources: srcList, count, type: "identity" });
     } else {
       const src = srcList[0];
       const arr = singleIdentity.get(src) ?? [];
@@ -283,7 +436,7 @@ function computeCorrelations(payloads: ClusterEvent[]): Correlations {
   for (const [value, { sources, count }] of urlMap) {
     const srcList = [...sources];
     if (srcList.length >= 2) {
-      crossUrls.push({ value, sources: srcList, count });
+      crossUrls.push({ value, sources: srcList, count, type: "url" });
     } else {
       const src = srcList[0];
       const arr = singleUrl.get(src) ?? [];
@@ -302,7 +455,7 @@ function computeCorrelations(payloads: ClusterEvent[]): Correlations {
   for (const [src, entries] of singleIdentity) {
     singleSource.push({
       source: src,
-      label: "User / Customer",
+      label: "User",
       entries: entries.sort((a, b) => b[1] - a[1]).slice(0, 5),
     });
   }
@@ -314,9 +467,25 @@ function computeCorrelations(payloads: ClusterEvent[]): Correlations {
     });
   }
   const errEntries = [...errorTypes.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
-  if (errEntries.length) singleSource.push({ source: "sentry",    label: "Error type",  entries: errEntries });
+  if (errEntries.length) singleSource.push({ source: "sentry",    label: "Error type",    entries: errEntries });
   const frEntries  = [...frustrations.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
-  if (frEntries.length)  singleSource.push({ source: "fullstory", label: "Frustration", entries: frEntries });
+  if (frEntries.length)  singleSource.push({ source: "fullstory", label: "Frustration",   entries: frEntries });
+  const msgEntries = [...sentryMessages.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
+  if (msgEntries.length) singleSource.push({ source: "sentry",    label: "Error message", entries: msgEntries });
+  const stripeErrEntries = [...stripeErrors.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+  if (stripeErrEntries.length) singleSource.push({ source: "stripe", label: "Failure reason", entries: stripeErrEntries });
+
+  // Zendesk: priority sorted by severity level, not count
+  const PRIORITY_ORDER: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
+  const priorityEntries = [...ticketPriorities.entries()]
+    .sort((a, b) => (PRIORITY_ORDER[a[0]] ?? 4) - (PRIORITY_ORDER[b[0]] ?? 4));
+  if (priorityEntries.length) singleSource.push({ source: "zendesk", label: "Ticket severity", entries: priorityEntries });
+
+  const topicEntries = [...ticketTopics.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6);
+  if (topicEntries.length) singleSource.push({ source: "zendesk", label: "Ticket topics", entries: topicEntries });
+
+  // Surface the strongest signals first — order by top-entry count descending
+  singleSource.sort((a, b) => (b.entries[0]?.[1] ?? 0) - (a.entries[0]?.[1] ?? 0));
 
   return { crossSourceMatches: allCross, singleSource };
 }
@@ -348,6 +517,21 @@ function ClusterDetail({
         status: "resolved",
       });
       onClusterUpdated?.({ status: "resolved" });
+      onClose();
+    } catch {
+      // silently ignore — status unchanged
+    } finally {
+      setResolving(false);
+    }
+  }
+
+  async function handleUnresolve() {
+    setResolving(true);
+    try {
+      await api.patch(`/api/projects/${slug}/clusters/${cluster.id}/status`, {
+        status: "open",
+      });
+      onClusterUpdated?.({ status: "open" });
       onClose();
     } catch {
       // silently ignore — status unchanged
@@ -394,6 +578,21 @@ function ClusterDetail({
 
   const rev = revenueLabel(cluster.revenue_score);
   const ux  = uxLabel(cluster.ux_score);
+
+  // Sum Stripe amounts (in cents) from the loaded event payloads.
+  // Covers payment_intent.amount, invoice.amount_due, charge.amount etc.
+  const stripeAmountCents = payloads
+    ? payloads
+        .filter((e) => e.source === "stripe")
+        .reduce((sum, e) => {
+          const obj = ((e.payload as Record<string, unknown>)?.data as Record<string, unknown>)
+            ?.object as Record<string, unknown>;
+          const amt =
+            typeof obj?.amount === "number"     ? obj.amount :
+            typeof obj?.amount_due === "number" ? obj.amount_due : 0;
+          return sum + (amt as number);
+        }, 0)
+    : null;
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -447,6 +646,16 @@ function ClusterDetail({
                 {resolving ? "Resolving…" : "✓ Mark as resolved"}
               </button>
             )}
+
+            {cluster.status === "resolved" && (
+              <button
+                onClick={handleUnresolve}
+                disabled={resolving}
+                className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+              >
+                {resolving ? "Updating…" : "↩ Mark as unresolved"}
+              </button>
+            )}
           </div>
           {issueError && (
             <p className="text-[11px] text-destructive mt-1">{issueError}</p>
@@ -486,9 +695,22 @@ function ClusterDetail({
         {/* overview */}
         {tab === "overview" && (
           <div className="p-4 space-y-5 text-sm">
+
+            {/* PM Insight — the "what to do" synthesis */}
+            {cluster.pm_insight && (
+              <div className="rounded-md border border-blue-200 dark:border-blue-900 bg-blue-50 dark:bg-blue-950/30 px-3.5 py-3 space-y-1.5">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-blue-600 dark:text-blue-400">
+                  Autopilot Recommendation
+                </p>
+                <p className="text-xs leading-relaxed text-foreground">
+                  {cluster.pm_insight}
+                </p>
+              </div>
+            )}
+
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">What&apos;s happening</p>
-              <p className="leading-relaxed">{cluster.root_cause}</p>
+              <p className="leading-relaxed">{formatRootCause(cluster.root_cause)}</p>
             </div>
 
             <div>
@@ -497,6 +719,14 @@ function ClusterDetail({
                 <div className="rounded-md border p-3 space-y-0.5">
                   <p className="text-xs text-muted-foreground">Revenue risk</p>
                   <p className="font-medium text-sm">{rev.text}</p>
+                  {stripeAmountCents != null && stripeAmountCents > 0 && (
+                    <p className="text-[11px] font-semibold tabular-nums">
+                      {new Intl.NumberFormat("en-US", {
+                        style: "currency", currency: "USD", maximumFractionDigits: 0,
+                      }).format(stripeAmountCents / 100)}
+                      {" "}in Stripe events
+                    </p>
+                  )}
                   <p className="text-[11px] text-muted-foreground">{rev.sub}</p>
                 </div>
                 <div className="rounded-md border p-3 space-y-0.5">
@@ -521,7 +751,7 @@ function ClusterDetail({
 
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">
-                Correlating attributes
+                Signals
               </p>
               {payloadsLoading && (
                 <div className="rounded-md border divide-y">
@@ -536,68 +766,150 @@ function ClusterDetail({
                 if (!hasAny) {
                   return <p className="text-xs text-muted-foreground">No common attributes detected across events.</p>;
                 }
+
+                // Map single-source labels to reader-friendly section headings
+                function sectionHeading(label: string, source: string): string {
+                  if (label === "User" && source === "stripe") return "Stripe billing accounts in error logs";
+                  if (label === "User" && source === "zendesk") return "Customers who filed tickets";
+                  if (label === "User")           return "Who's affected";
+                  if (label === "Page URL")        return "Where it's happening";
+                  if (label === "Error type")      return "What's breaking";
+                  if (label === "Error message")   return "What the error says";
+                  if (label === "Failure reason")  return "Stripe failure codes";
+                  if (label === "Frustration")     return "How bad the experience is";
+                  if (label === "Ticket severity") return "Support ticket urgency";
+                  if (label === "Ticket topics")   return "What customers are reporting";
+                  return label;
+                }
+                function entryTooltip(label: string, source: string, cnt: number): string {
+                  if (label === "User" && source === "stripe")
+                    return `This Stripe billing account appeared in ${cnt} event${cnt !== 1 ? "s" : ""} in this issue`;
+                  if (label === "User" && source === "zendesk")
+                    return `This customer filed or is linked to ${cnt} ticket${cnt !== 1 ? "s" : ""} in this issue`;
+                  if (label === "User")
+                    return `Seen in ${cnt} ${source} event${cnt !== 1 ? "s" : ""} in this issue`;
+                  if (label === "Page URL")
+                    return `This page appeared in ${cnt} ${source} event${cnt !== 1 ? "s" : ""} in this issue`;
+                  if (label === "Error type")
+                    return `Thrown ${cnt} time${cnt !== 1 ? "s" : ""} across events in this issue`;
+                  if (label === "Error message")
+                    return `This exact error message appeared ${cnt} time${cnt !== 1 ? "s" : ""} in this issue`;
+                  if (label === "Failure reason")
+                    return `Stripe returned this decline code ${cnt} time${cnt !== 1 ? "s" : ""} in this issue`;
+                  if (label === "Frustration")
+                    return `Recorded ${cnt} time${cnt !== 1 ? "s" : ""} across FullStory sessions in this issue`;
+                  if (label === "Ticket severity")
+                    return `${cnt} Zendesk ticket${cnt !== 1 ? "s" : ""} at this priority level in this issue`;
+                  if (label === "Ticket topics")
+                    return `This tag appeared on ${cnt} Zendesk ticket${cnt !== 1 ? "s" : ""} in this issue`;
+                  return `Seen ${cnt} time${cnt !== 1 ? "s" : ""} in this issue`;
+                }
+
                 return (
                   <div className="rounded-md border divide-y text-xs">
 
-                    {/* ── cross-source matches (highest signal) ── */}
-                    {corr.crossSourceMatches.length > 0 && (
-                      <>
-                        <div className="px-3 py-1.5 bg-amber-50 dark:bg-amber-950/30">
-                          <p className="text-[10px] font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-400">
-                            Matched across sources
-                          </p>
-                        </div>
-                        {corr.crossSourceMatches.map(({ value, sources, count }) => (
-                          <div
-                            key={value}
-                            onClick={() => copyToClipboard(value)}
-                            title={value}
-                            className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-muted/40 transition-colors"
-                          >
-                            <div className="flex gap-0.5 shrink-0">
-                              {sources.map((src) => <SourceIcon key={src} source={src} />)}
-                            </div>
-                            <span className="flex-1 font-mono break-all">{value}</span>
-                            <CountBadge
-                              count={count}
-                              tooltip={`Appeared in ${count} event${count !== 1 ? "s" : ""} — matched across ${sources.join(" + ")}`}
-                            />
-                          </div>
-                        ))}
-                      </>
-                    )}
-
-                    {/* ── single-source signals ── */}
-                    {corr.singleSource.filter((r) => r.entries.length > 0).map(({ source, label, entries }) => {
-                      function entryTooltip(cnt: number): string {
-                        if (label === "User / Customer") return `This identifier appeared in ${cnt} event${cnt !== 1 ? "s" : ""} from ${source}`;
-                        if (label === "Page URL")        return `This page was involved in ${cnt} event${cnt !== 1 ? "s" : ""} from ${source}`;
-                        if (label === "Error type")      return `This error type occurred ${cnt} time${cnt !== 1 ? "s" : ""}`;
-                        if (label === "Frustration")     return `This frustration signal was recorded ${cnt} time${cnt !== 1 ? "s" : ""}`;
-                        return `Seen ${cnt} time${cnt !== 1 ? "s" : ""}`;
-                      }
+                    {/* ── cross-source identities: same person seen in 2+ tools ── */}
+                    {corr.crossSourceMatches.filter(m => m.type === "identity").length > 0 && (() => {
+                      const rows = corr.crossSourceMatches.filter(m => m.type === "identity");
                       return (
-                        <div key={`${source}-${label}`} className="flex flex-col gap-2 px-3 py-2.5">
-                          <div className="flex items-center gap-1.5 shrink-0">
-                            <SourceIcon source={source} />
-                            <span className="text-muted-foreground">{label}</span>
+                        <>
+                          <div className="px-3 py-1.5 bg-amber-50 dark:bg-amber-950/30 flex items-center justify-between border-b-0">
+                            <p className="text-muted-foreground font-medium">
+                              Affected users — seen across multiple tools
+                            </p>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span className="text-muted-foreground/60 cursor-help text-[10px]">?</span>
+                              </TooltipTrigger>
+                              <TooltipContent side="left" className="max-w-52 text-xs">
+                                The same email or user ID appeared in events from 2+ services — e.g. the same person triggered a Sentry error AND a FullStory frustration signal. Highest-priority users to investigate or contact.
+                              </TooltipContent>
+                            </Tooltip>
                           </div>
-                          <div className="flex flex-wrap gap-1">
-                            {entries.map(([val, cnt]) => (
-                              <span
-                                key={val}
-                                onClick={() => copyToClipboard(val)}
-                                title={val}
-                                className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 font-mono cursor-pointer hover:bg-muted/60 transition-colors"
-                              >
-                                <span className="break-all">{val}</span>
-                                <CountBadge count={cnt} tooltip={entryTooltip(cnt)} />
-                              </span>
-                            ))}
-                          </div>
-                        </div>
+                          {rows.map(({ value, sources, count }) => (
+                            <div
+                              key={value}
+                              onClick={() => copyToClipboard(value)}
+                              title={value}
+                              className="flex items-center gap-2 py-2 mx-3 cursor-pointer hover:bg-muted/40 transition-colors"
+                            >
+                              <div className="flex gap-0.5 shrink-0">
+                                {sources.map((src) => <SourceIcon key={src} source={src} />)}
+                              </div>
+                              <span className="flex-1 font-mono break-all">{value}</span>
+                              <CountBadge
+                                count={count}
+                                tooltip={`Found in ${count} event${count !== 1 ? "s" : ""} in this issue, across ${sources.join(" + ")}`}
+                              />
+                            </div>
+                          ))}
+                        </>
                       );
-                    })}
+                    })()}
+
+                    {/* ── cross-source URLs: same page flagged by 2+ tools ── */}
+                    {corr.crossSourceMatches.filter(m => m.type === "url").length > 0 && (() => {
+                      const rows = corr.crossSourceMatches.filter(m => m.type === "url");
+                      return (
+                        <>
+                          <div className="px-3 py-1.5 bg-blue-50 dark:bg-blue-950/30 flex items-center justify-between border-b-0">
+                            <p className="text-[10px] font-semibold uppercase tracking-wider">
+                              Shared pages — flagged by multiple tools
+                            </p>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span className="text-muted-foreground/60 cursor-help text-[10px]">?</span>
+                              </TooltipTrigger>
+                              <TooltipContent side="left" className="max-w-52 text-xs">
+                                The same URL appeared in events from 2+ services — e.g. Sentry logged an error on a page where FullStory also recorded a rage-click. High confidence the bug is on this specific page.
+                              </TooltipContent>
+                            </Tooltip>
+                          </div>
+                          {rows.map(({ value, sources, count }) => (
+                            <div
+                              key={value}
+                              onClick={() => copyToClipboard(value)}
+                              title={value}
+                              className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-muted/40 transition-colors"
+                            >
+                              <div className="flex gap-0.5 shrink-0">
+                                {sources.map((src) => <SourceIcon key={src} source={src} />)}
+                              </div>
+                              <span className="flex-1 font-mono truncate">{value}</span>
+                              <CountBadge
+                                count={count}
+                                tooltip={`This URL appeared in ${count} event${count !== 1 ? "s" : ""} in this issue, across ${sources.join(" + ")}`}
+                              />
+                            </div>
+                          ))}
+                        </>
+                      );
+                    })()}
+
+                    {/* ── single-source signals with narrative headings ── */}
+                    {corr.singleSource.filter((r) => r.entries.length > 0).map(({ source, label, entries }) => (
+                      <div key={`${source}-${label}`} className="flex flex-col gap-2 px-3 py-2.5">
+                        <div className="flex items-center gap-1.5">
+                          <SourceIcon source={source} />
+                          <span className="text-muted-foreground font-medium">
+                            {sectionHeading(label, source)}
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap gap-1">
+                          {entries.map(([val, cnt]) => (
+                            <span
+                              key={val}
+                              onClick={() => copyToClipboard(val)}
+                              title={val}
+                              className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 font-mono cursor-pointer hover:bg-muted/60 transition-colors"
+                            >
+                              <span className="break-all">{val}</span>
+                              <CountBadge count={cnt} tooltip={entryTooltip(label, source, cnt)} />
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
 
                   </div>
                 );
@@ -607,7 +919,7 @@ function ClusterDetail({
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">Timeline</p>
               <p className="text-xs text-muted-foreground">
-                First seen {timeAgo(cluster.first_seen)} · Last seen {timeAgo(cluster.last_seen)}
+                Issue first seen {timeAgo(cluster.first_seen)} · most recent event {timeAgo(cluster.last_seen)}
               </p>
             </div>
 
@@ -773,47 +1085,32 @@ function SortableHeader({
 
 // ── source filter pill ────────────────────────────────────────────────────────
 
-const SOURCES = [
-  { value: "", label: "All" },
-  { value: "stripe", label: "Stripe" },
-  { value: "sentry", label: "Sentry" },
-  { value: "fullstory", label: "FullStory" },
-] as const;
-
 // ── main feed ────────────────────────────────────────────────────────────────
 
 export default function ClustersFeed({
   slug,
   initialData,
-  initialCrossChannel = true,
 }: {
   slug: string;
   initialData?: ClustersPage | null;
-  initialCrossChannel?: boolean;
 }) {
   // ── view / filter / sort / page state ────────────────────────────────────
   const [view, setView]               = useState<"active" | "resolved">("active");
-  const [filterSource, setSource]     = useState("");
   const [search, setSearch]           = useState("");
-  const [showFilters, setShowFilters] = useState(false);
   const [sortBy, setSortBy]           = useState<SortKey | null>(null);
   const [sortDir, setSortDir]         = useState<"asc" | "desc">("desc");
   const [page, setPage]               = useState(1);
 
   const PAGE_SIZE = 20;
 
-  const params: ClustersParams = {
-    view,
-    source: filterSource || undefined,
-  };
+  const params: ClustersParams = { view };
 
   const { data, loading, error, refetch } = useClusters(slug, initialData, params);
 
   const [evaluating, setEvaluating]         = useState(false);
   const [selected, setSelected]             = useState<Set<string>>(new Set());
   const [activeCluster, setActiveCluster]   = useState<Cluster | null>(null);
-  const [crossChannel, setCrossChannel]     = useState(initialCrossChannel);
-  const [togglingMode, setTogglingMode]     = useState(false);
+  const [showHelp, setShowHelp]             = useState(false);
   const [detailWidth, setDetailWidth]       = useState(420);
   const [isDragging, setIsDragging]         = useState(false);
   const dragState = useRef<{ startX: number; startWidth: number } | null>(null);
@@ -850,8 +1147,8 @@ export default function ClustersFeed({
     setPage(1);
   }
 
-  // Reset selection + page when view/filters/sort change
-  useEffect(() => { setSelected(new Set()); setActiveCluster(null); setPage(1); }, [view, filterSource, search]);
+  // Reset selection + page when view/search/sort change
+  useEffect(() => { setSelected(new Set()); setActiveCluster(null); setPage(1); }, [view, search]);
 
   // Apply optimistic updates to a cluster (e.g. after filing a GitHub issue)
   function handleClusterUpdated(id: string, patch: Partial<Cluster>) {
@@ -918,19 +1215,6 @@ export default function ClustersFeed({
     }
   }
 
-  async function handleToggleCrossChannel(next: boolean) {
-    setTogglingMode(true);
-    try {
-      await api.put(`/api/projects/${slug}/scoring-config`, { cross_channel: next });
-      setCrossChannel(next);
-      await api.post(`/api/projects/${slug}/clusters/evaluate`);
-      await refetch();
-    } catch { /* silently ignore */ } finally {
-      setTogglingMode(false);
-    }
-  }
-
-  const hasActiveFilters = filterSource !== "" || search !== "";
 
   return (
     <div className={`flex -mt-6 items-start${isDragging ? " select-none" : ""}`}>
@@ -955,107 +1239,49 @@ export default function ClustersFeed({
         </div>
 
         {/* ── Toolbar ────────────────────────────────────────────────── */}
-        <div className="flex items-center justify-between gap-4 flex-wrap">
-          <p className="text-sm text-muted-foreground">
+        <div className="flex items-center gap-3">
+          {/* Search — always visible */}
+          <div className="relative flex-1">
+            <IconSearch className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground pointer-events-none" />
+            <input
+              type="text"
+              placeholder="Search by title or root cause…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full rounded-md border border-input bg-background pl-8 pr-3 py-1.5 text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+            />
+            {search && (
+              <button
+                onClick={() => setSearch("")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <IconX className="size-3" />
+              </button>
+            )}
+          </div>
+
+          <p className="text-xs text-muted-foreground shrink-0">
             {data ? `${totalItems} issue${totalItems !== 1 ? "s" : ""}` : ""}
             {selected.size > 0 && (
-              <span className="ml-2 text-foreground font-medium">· {selected.size} selected</span>
+              <span className="ml-1.5 text-foreground font-medium">· {selected.size} selected</span>
             )}
           </p>
 
-          <div className="flex items-center gap-3">
-            {view === "active" && (
-              <>
-                {/* filter toggle */}
-                <button
-                  onClick={() => setShowFilters((v) => !v)}
-                  className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-md border transition-colors ${
-                    showFilters || hasActiveFilters
-                      ? "border-foreground/40 bg-muted text-foreground"
-                      : "border-border text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  <IconFilter className="size-3.5" />
-                  Filters
-                  {hasActiveFilters && (
-                    <span className="ml-0.5 rounded-full bg-foreground text-background text-[10px] px-1 leading-4">
-                      {(filterSource ? 1 : 0) + (search ? 1 : 0)}
-                    </span>
-                  )}
-                </button>
+          {view === "active" && (
+            <Button size="sm" variant="outline" onClick={handleEvaluate} disabled={evaluating} className="gap-2 shrink-0">
+              <IconRefresh className={`size-4 ${evaluating ? "animate-spin" : ""}`} />
+              Evaluate now
+            </Button>
+          )}
 
-                {/* cross-channel toggle */}
-                <div className="flex items-center gap-2">
-                  <Switch
-                    id="cross-channel"
-                    checked={crossChannel}
-                    onCheckedChange={handleToggleCrossChannel}
-                    disabled={togglingMode}
-                  />
-                  <label htmlFor="cross-channel" className="text-sm cursor-pointer select-none">
-                    {crossChannel
-                      ? <span>Cross-channel <span className="text-muted-foreground font-normal">on</span></span>
-                      : <span>Pattern-only <span className="text-muted-foreground font-normal">on</span></span>
-                    }
-                  </label>
-                </div>
-
-                <Button size="sm" variant="outline" onClick={handleEvaluate} disabled={evaluating || togglingMode} className="gap-2">
-                  <IconRefresh className={`size-4 ${evaluating ? "animate-spin" : ""}`} />
-                  Evaluate now
-                </Button>
-              </>
-            )}
-          </div>
+          <button
+            onClick={() => setShowHelp(true)}
+            className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
+            aria-label="How issues work"
+          >
+            <IconHelpCircle className="size-4" />
+          </button>
         </div>
-
-        {/* ── Filter bar (active view only) ──────────────────────────── */}
-        {view === "active" && showFilters && (
-          <div className="rounded-lg border bg-muted/20 px-4 py-3 space-y-3">
-            {/* Source pills */}
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-xs text-muted-foreground w-16 shrink-0">Source</span>
-              <div className="flex gap-1.5 flex-wrap">
-                {SOURCES.map(({ value, label }) => (
-                  <button
-                    key={value}
-                    onClick={() => setSource(value)}
-                    className={`px-2.5 py-1 text-xs rounded-full border transition-colors ${
-                      filterSource === value
-                        ? "border-foreground bg-foreground text-background"
-                        : "border-border text-muted-foreground hover:text-foreground hover:border-foreground/40"
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Search */}
-            <div className="flex items-center gap-3">
-              <span className="text-xs text-muted-foreground w-16 shrink-0">Search</span>
-              <div className="relative flex-1">
-                <IconSearch className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground pointer-events-none" />
-                <input
-                  type="text"
-                  placeholder="Filter by title or root cause…"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className="w-full rounded-md border border-input bg-background pl-8 pr-3 py-1.5 text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-                />
-                {search && (
-                  <button
-                    onClick={() => setSearch("")}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    <IconX className="size-3" />
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* loading */}
         {loading && (
@@ -1079,8 +1305,8 @@ export default function ClustersFeed({
             <p className="text-sm text-muted-foreground">
               {view === "resolved"
                 ? "No resolved issues yet."
-                : hasActiveFilters
-                  ? "No issues match the current filters."
+                : search
+                  ? "No issues match your search."
                   : "No open issues. Click \"Evaluate now\" to group your events."}
             </p>
             {view === "resolved" && (
@@ -1093,7 +1319,7 @@ export default function ClustersFeed({
 
         {/* table */}
         {!loading && totalItems > 0 && (
-          <div className="rounded-lg border overflow-hidden">
+          <div className="rounded-lg overflow-hidden">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b bg-muted/40">
@@ -1212,6 +1438,118 @@ export default function ClustersFeed({
             )}
           </div>
         )}
+
+      {/* ── How it works sheet ──────────────────────────────────────── */}
+      <Sheet open={showHelp} onOpenChange={setShowHelp}>
+        <SheetContent side="right" className="w-full sm:max-w-lg overflow-y-auto">
+          <SheetTitle className="flex items-center gap-2 mb-6">
+            <IconHelpCircle className="size-4 text-muted-foreground" />
+            How Issues work
+          </SheetTitle>
+          <div className="space-y-7 text-sm pr-1">
+
+            {/* pipeline */}
+            <div className="space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">The pipeline</p>
+              <p className="text-muted-foreground leading-relaxed">
+                Raw events from Stripe, Sentry, FullStory, and Zendesk flow in via webhooks or simulation.
+                Autopilot groups them into <span className="text-foreground font-medium">issues</span> — clusters
+                of events that share the same underlying root cause — and scores each one so the
+                highest-impact problems surface first.
+              </p>
+              <div className="rounded-md border bg-muted/30 p-3 font-mono text-xs leading-6 text-muted-foreground">
+                <p>Stripe event  ──┐</p>
+                <p>Sentry event  ──┼──▶  LLM grouping  ──▶  Issue  ──▶  Score</p>
+                <p>FullStory     ──┘         (every 2 min)         Revenue × w1</p>
+                <p>                                                Frequency × w2</p>
+                <p>                                                UX Impact × w3</p>
+              </div>
+            </div>
+
+            {/* scoring */}
+            <div className="space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Severity score</p>
+              <p className="text-muted-foreground leading-relaxed">
+                Each issue gets a score from 0–1 based on three signals, each normalised against
+                your configured thresholds (Settings → Prioritization):
+              </p>
+              <div className="rounded-md border bg-muted/30 p-3 font-mono text-xs leading-6 text-muted-foreground space-y-1">
+                <p>Revenue    = sum of $ at risk  ÷  max_revenue_usd</p>
+                <p>Frequency  = event count       ÷  max_frequency_count</p>
+                <p>UX Impact  = avg frustration signal per event</p>
+                <p className="pt-1 text-foreground">Score = (Rev × w1) + (Freq × w2) + (UX × w3)</p>
+              </div>
+              <div className="rounded-md border divide-y text-xs">
+                {[
+                  { badge: "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400",    label: "Critical", range: "≥ 0.7" },
+                  { badge: "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400", label: "High",     range: "0.4 – 0.69" },
+                  { badge: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400",  label: "Medium",   range: "0.2 – 0.39" },
+                  { badge: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400",  label: "Low",      range: "0.05 – 0.19" },
+                  { badge: "bg-muted text-muted-foreground",                                   label: "Lowest",   range: "< 0.05" },
+                ].map(({ badge, label, range }) => (
+                  <div key={label} className="flex items-center justify-between px-3 py-2">
+                    <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${badge}`}>{label}</span>
+                    <span className="font-mono text-muted-foreground">{range}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* correlating attributes */}
+            <div className="space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Correlating attributes</p>
+              <p className="text-muted-foreground leading-relaxed">
+                When you open an issue, Autopilot scans every event in the cluster and extracts
+                identifiers — emails, user IDs, page URLs, error types, and frustration signals.
+                It then answers two questions:
+              </p>
+              <div className="rounded-md border bg-muted/30 p-3 font-mono text-xs leading-6 text-muted-foreground space-y-2">
+                <p><span className="text-foreground">Who is affected across all your tools?</span></p>
+                <p>  user@co.com seen in Sentry error + FullStory rage-click</p>
+                <p>  → same person, broken experience end-to-end</p>
+                <p className="pt-1"><span className="text-foreground">Where and what is concentrated within each tool?</span></p>
+                <p>  Sentry: RateLimitError ×4, TimeoutError ×3</p>
+                <p>  FullStory: /checkout ×6, rage_click ×6</p>
+                <p>  Zendesk: urgent ×2, tag:billing ×3</p>
+              </div>
+              <div className="space-y-2.5 text-xs text-muted-foreground">
+                <div className="flex gap-2.5">
+                  <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0 mt-1" />
+                  <p><span className="text-foreground font-medium">Affected users</span> — email addresses and app user IDs (e.g. <code className="font-mono bg-muted px-1 rounded">user_789</code>) seen in 2+ tools for this issue. These are your highest-priority people to contact or investigate.</p>
+                </div>
+                <div className="flex gap-2.5">
+                  <span className="w-2 h-2 rounded-full bg-muted-foreground/40 shrink-0 mt-1" />
+                  <p><span className="text-foreground font-medium">Stripe billing accounts</span> — Stripe customer IDs (<code className="font-mono bg-muted px-1 rounded">cus_xxx</code>) extracted from Stripe events and any <code className="font-mono bg-muted px-1 rounded">customer_id</code> tags in Sentry. These are billing entities, not necessarily the same as your app's user accounts.</p>
+                </div>
+                <div className="flex gap-2.5">
+                  <span className="w-2 h-2 rounded-full bg-muted-foreground/40 shrink-0 mt-1" />
+                  <p><span className="text-foreground font-medium">Where it's happening</span> — page URLs concentrated in one service. If the same URL appears in FullStory sessions and Sentry errors, the bug is likely on that page.</p>
+                </div>
+                <div className="flex gap-2.5">
+                  <span className="w-2 h-2 rounded-full bg-muted-foreground/40 shrink-0 mt-1" />
+                  <p><span className="text-foreground font-medium">What's breaking</span> — repeated exception class names from Sentry. The most frequent error type is usually the root cause to fix.</p>
+                </div>
+                <div className="flex gap-2.5">
+                  <span className="w-2 h-2 rounded-full bg-muted-foreground/40 shrink-0 mt-1" />
+                  <p><span className="text-foreground font-medium">User experience signal</span> — FullStory frustration types (rage click, dead click, thrash). Rage clicks on the same element confirm users are actively hitting the broken state.</p>
+                </div>
+              </div>
+            </div>
+
+            {/* github */}
+            <div className="space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">GitHub issues</p>
+              <p className="text-muted-foreground leading-relaxed">
+                Autopilot only files a GitHub issue when the cluster is <span className="text-foreground font-medium">engineering-actionable</span> — meaning it contains at least one non-Stripe event, or a Stripe error that's caused by your code (e.g. <code className="font-mono bg-muted px-1 rounded">invalid_request_error</code>), not a customer's bank declining their card.
+              </p>
+              <p className="text-muted-foreground leading-relaxed">
+                Customer-side failures like <code className="font-mono bg-muted px-1 rounded">insufficient_funds</code> or <code className="font-mono bg-muted px-1 rounded">card_expired</code> are surfaced in the Issues feed but do not create GitHub noise — they belong to Customer Success, not engineering.
+              </p>
+            </div>
+
+          </div>
+        </SheetContent>
+      </Sheet>
 
       </div>{/* end left column */}
 

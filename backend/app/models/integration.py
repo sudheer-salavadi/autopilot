@@ -13,6 +13,7 @@ class IntegrationType(str, enum.Enum):
     stripe = "stripe"
     sentry = "sentry"
     fullstory = "fullstory"
+    zendesk = "zendesk"
 
 
 class Integration(Base, TimestampMixin):

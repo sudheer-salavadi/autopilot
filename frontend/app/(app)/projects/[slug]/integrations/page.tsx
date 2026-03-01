@@ -10,6 +10,7 @@ interface ScoringConfig {
   simulate_stripe: boolean;
   simulate_sentry: boolean;
   simulate_fullstory: boolean;
+  simulate_zendesk: boolean;
 }
 
 export default async function IntegrationsPage({
@@ -29,6 +30,7 @@ export default async function IntegrationsPage({
     scoringConfig?.simulate_stripe    && "stripe",
     scoringConfig?.simulate_sentry    && "sentry",
     scoringConfig?.simulate_fullstory && "fullstory",
+    scoringConfig?.simulate_zendesk   && "zendesk",
   ].filter(Boolean) as string[];
 
   return (
@@ -40,6 +42,7 @@ export default async function IntegrationsPage({
           initialIntegrations={integrations}
           initialSimulatingTypes={initialSimulatingTypes}
           initialGithubConfig={githubConfig ?? undefined}
+          appSlug={process.env.NEXT_PUBLIC_GITHUB_APP_SLUG ?? ""}
         />
       </div>
     </>

@@ -1,11 +1,13 @@
 import hashlib
 import hmac
+import json
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.db.session import get_db
 from app.models.cluster import Cluster, ClusterStatus
 from app.models.event import Event
@@ -16,6 +18,7 @@ from app.services.webhooks import (
     verify_fullstory_webhook,
     verify_sentry_webhook,
     verify_stripe_webhook,
+    verify_zendesk_webhook,
 )
 
 router = APIRouter(prefix="/api/webhooks", tags=["webhooks"])
@@ -113,7 +116,7 @@ async def fullstory_webhook(
         project_id=project_id,
         integration_id=integration.id,
         source="fullstory",
-        event_type=payload.get("eventName", "unknown"),
+        event_type=payload.get("eventName") or payload.get("name", "unknown"),
         payload=payload,
         is_demo=False,
     ))
@@ -122,37 +125,55 @@ async def fullstory_webhook(
     return {"received": True}
 
 
-@router.post("/{project_id}/github", status_code=status.HTTP_200_OK)
-async def github_webhook(
+@router.post("/{project_id}/zendesk", status_code=status.HTTP_200_OK)
+async def zendesk_webhook(
     project_id: uuid.UUID,
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    """Receive GitHub issue events and sync cluster status.
+    integration = await _get_active_integration(project_id, IntegrationType.zendesk, db)
+    payload = await verify_zendesk_webhook(request, integration.webhook_secret)
+
+    # Real Zendesk schema: top-level "type" field, e.g. "zen:event-type:ticket.created"
+    event_type = payload.get("type", "unknown")
+
+    db.add(Event(
+        project_id=project_id,
+        integration_id=integration.id,
+        source="zendesk",
+        event_type=event_type,
+        payload=payload,
+        is_demo=False,
+    ))
+    await enqueue_evaluation(project_id, db)
+    await db.commit()
+    return {"received": True}
+
+
+# ---------------------------------------------------------------------------
+# GitHub App — single shared webhook for the whole app
+# ---------------------------------------------------------------------------
+
+@router.post("/github-app", status_code=status.HTTP_200_OK)
+async def github_app_webhook(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Shared GitHub App webhook — receives events from all installations.
 
     Events handled:
-    - issues.closed   → cluster status = resolved
-    - issues.reopened → cluster status = investigating
+    - installation.deleted  → clear installation_id on all matching projects
+    - issues.closed         → cluster status = resolved
+    - issues.reopened       → cluster status = investigating
     """
     body = await request.body()
 
-    # Load GitHub config to get webhook secret
-    result = await db.execute(
-        select(ProjectGithubConfig).where(
-            ProjectGithubConfig.project_id == project_id
-        )
-    )
-    gh_config = result.scalar_one_or_none()
-
-    # Return 200 so GitHub doesn't disable the webhook even if unconfigured
-    if not gh_config:
-        return {"received": True}
-
-    # Verify signature if a webhook secret is configured
-    if gh_config.webhook_secret:
+    # Verify HMAC signature using the App-level webhook secret
+    webhook_secret = settings.GITHUB_APP_WEBHOOK_SECRET
+    if webhook_secret:
         sig_header = request.headers.get("X-Hub-Signature-256", "")
         expected = "sha256=" + hmac.new(
-            gh_config.webhook_secret.encode(), body, hashlib.sha256
+            webhook_secret.encode(), body, hashlib.sha256
         ).hexdigest()
         if not hmac.compare_digest(expected, sig_header):
             raise HTTPException(
@@ -161,36 +182,80 @@ async def github_webhook(
             )
 
     gh_event = request.headers.get("X-GitHub-Event", "")
-    if gh_event != "issues":
-        return {"received": True}
 
     try:
-        import json
         payload = json.loads(body)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
 
     action = payload.get("action", "")
-    issue_number = payload.get("issue", {}).get("number")
 
-    if not issue_number or action not in ("closed", "reopened"):
+    # ── installation.deleted: unlink from all projects that used this installation ──
+    if gh_event == "installation" and action == "deleted":
+        installation_id = payload.get("installation", {}).get("id")
+        if installation_id:
+            result = await db.execute(
+                select(ProjectGithubConfig).where(
+                    ProjectGithubConfig.installation_id == installation_id
+                )
+            )
+            for cfg in result.scalars().all():
+                cfg.installation_id = None
+            await db.commit()
         return {"received": True}
 
-    # Find the cluster linked to this issue number
-    cluster_result = await db.execute(
-        select(Cluster).where(
-            Cluster.project_id == project_id,
-            Cluster.github_issue_number == issue_number,
+    # ── issues.closed / issues.reopened: sync cluster status ──
+    if gh_event == "issues" and action in ("closed", "reopened"):
+        installation_id = payload.get("installation", {}).get("id")
+        issue_number = payload.get("issue", {}).get("number")
+
+        if not installation_id or not issue_number:
+            return {"received": True}
+
+        # Find the project linked to this installation
+        cfg_result = await db.execute(
+            select(ProjectGithubConfig).where(
+                ProjectGithubConfig.installation_id == installation_id
+            )
         )
-    )
-    cluster = cluster_result.scalar_one_or_none()
-    if not cluster:
-        return {"received": True}
+        gh_config = cfg_result.scalar_one_or_none()
+        if not gh_config:
+            return {"received": True}
 
-    if action == "closed":
-        cluster.status = ClusterStatus.resolved
-    elif action == "reopened":
-        cluster.status = ClusterStatus.investigating
+        # Find the cluster linked to this issue number
+        cluster_result = await db.execute(
+            select(Cluster).where(
+                Cluster.project_id == gh_config.project_id,
+                Cluster.github_issue_number == issue_number,
+            )
+        )
+        cluster = cluster_result.scalar_one_or_none()
+        if not cluster:
+            return {"received": True}
 
-    await db.commit()
+        if action == "closed":
+            cluster.status = ClusterStatus.resolved
+        elif action == "reopened":
+            cluster.status = ClusterStatus.investigating
+
+        await db.commit()
+
+    return {"received": True}
+
+
+# ---------------------------------------------------------------------------
+# Per-project GitHub webhook (legacy — kept for backward compat, no-ops)
+# ---------------------------------------------------------------------------
+
+@router.post("/{project_id}/github", status_code=status.HTTP_200_OK)
+async def github_webhook_legacy(
+    project_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Legacy per-project GitHub webhook endpoint.
+
+    Now that the App sends all events to /api/webhooks/github-app, this
+    endpoint is a no-op.  Kept so existing webhook URLs don't 404.
+    """
     return {"received": True}

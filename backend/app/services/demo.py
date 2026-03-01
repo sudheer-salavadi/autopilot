@@ -61,6 +61,14 @@ FULLSTORY_SCENARIOS = [
     "A cohort of high-value users exhibit frustration signals on the billing settings page after a price change.",
 ]
 
+ZENDESK_SCENARIOS = [
+    "A customer opens an urgent ticket because they can't complete a payment at checkout.",
+    "Multiple customers report being unable to access their account after a backend deployment.",
+    "A high-value customer files a ticket about an incorrect charge on their invoice.",
+    "A batch of users reports the upgrade flow is broken and they can't access paid features.",
+    "Customers complain about slow load times on the billing settings page and missing invoice history.",
+]
+
 SYSTEM_PROMPT = """You are a webhook payload generator for a SaaS observability demo.
 Generate realistic webhook events in the exact format the provider uses.
 Return only valid JSON, no markdown, no explanation."""
@@ -98,37 +106,65 @@ async def generate_demo_events(
         event_count = "3-4"
         event_types = "e.g. event.alert, issue.created, issue.resolved"
 
-    else:  # fullstory
+    elif source == "fullstory":
         scenario = random.choice(FULLSTORY_SCENARIOS)
-        format_rules = """FullStory webhook format rules:
-- eventName: the event type string
+        format_rules = """FullStory webhook format rules (confirmed real schema):
+- eventName: the event type string (e.g. "rage_click", "dead_click", "error_click", "thrash")
 - version: 1
 - data: {
-    session_id: "fs_sess_<alphanum>",
-    session_url: "https://app.fullstory.com/ui/ORG/page/People/<user_id>/Segments/mine/Session/<session_id>",
-    user_id: "<user_id>",
-    user_email: "<email>",
-    user_display_name: "<name>",
-    event_time: ISO-8601,
-    page_url: "https://app.example.com/<path>",
+    pageInfo: {
+      pageUrl: "https://app.example.com/<path>",
+      referrer: "https://app.example.com/<previous_path>",
+      country: "US",
+      ipAddress: "<ip>"
+    },
+    sessionUrl: "https://app.fullstory.com/ui/ORG/session/<session_id>",
+    userUrl: "https://app.fullstory.com/ui/ORG/segments/everyone/people/0/user/<user_id>",
+    frustration_type: "rage_click" | "dead_click" | "error_click" | "thrash",
     target_text: "<button or element text>",
-    element_name: "<element identifier>",
-    frustration_type: "rage_click" | "dead_click" | "error_click" | "thrash" | null,
     click_count: <int, relevant for rage_click>,
-    session_duration_seconds: <int>
+    user_id: "<app user id>",
+    user_email: "<user email address>"
   }"""
         event_count = "3-5"
-        event_types = "e.g. rage_click, dead_click, error_click, session_start, session_end, custom_event"
+        event_types = "rage_click, dead_click, error_click, thrash"
+
+    else:  # zendesk
+        scenario = random.choice(ZENDESK_SCENARIOS)
+        format_rules = """Zendesk webhook format rules (real schema v2022-11-06):
+- type: "zen:event-type:ticket.created" or "zen:event-type:ticket.updated"
+- account_id: <integer>
+- id: "<UUID>"
+- time: ISO-8601 with nanoseconds (e.g. "2025-01-08T10:12:07.672717030Z")
+- zendesk_event_version: "2022-11-06"
+- subject: "zen:ticket:<ticket_id>" (resource URI — NOT the human ticket subject)
+- detail: {
+    id: "<ticket_id as string>",
+    subject: "<short human-readable ticket subject>",
+    description: "<detailed problem description, 1-2 sentences>",
+    status: "NEW" | "OPEN" | "PENDING",
+    priority: "URGENT" | "HIGH" | "NORMAL" | "LOW",
+    type: "PROBLEM" | "INCIDENT" | "QUESTION" | "TASK",
+    tags: ["relevant", "topic", "tags"],
+    created_at: ISO-8601,
+    updated_at: ISO-8601,
+    requester_id: "<integer as string>",
+    external_id: "<app-side user_id if developer set it, else null>",
+    submitter_id: "<integer as string>",
+    assignee_id: "<integer as string>",
+    organization_id: "<integer as string or null>",
+    is_public: true,
+    via: {"channel": "web_service" | "email" | "api"}
+  }
+- event: {"meta": {"sequence": {"id": <large int>, "position": 1}}}"""
+        event_count = "2-3"
+        event_types = "zen:event-type:ticket.created, zen:event-type:ticket.updated"
 
     # Build correlation context if we have events from other sources
     correlation_section = ""
     if context_events:
-        if source == "fullstory":
-            other_label = "Stripe/Sentry"
-        elif source == "stripe":
-            other_label = "Sentry/FullStory"
-        else:
-            other_label = "Stripe/FullStory"
+        all_sources = {"stripe", "sentry", "fullstory", "zendesk"}
+        other_label = "/".join(s.capitalize() for s in sorted(all_sources - {source}))
         correlation_section = f"""
 IMPORTANT — Correlation required:
 These recent {other_label} events already exist in the system. Extract the customer identifiers
@@ -195,6 +231,7 @@ async def simulate_active_projects(db: AsyncSession) -> None:
                 ProjectScoringConfig.simulate_stripe.is_(True),
                 ProjectScoringConfig.simulate_sentry.is_(True),
                 ProjectScoringConfig.simulate_fullstory.is_(True),
+                ProjectScoringConfig.simulate_zendesk.is_(True),
             )
         )
     )
@@ -204,12 +241,13 @@ async def simulate_active_projects(db: AsyncSession) -> None:
         sources = (
             (["stripe"]    if config.simulate_stripe    else []) +
             (["sentry"]    if config.simulate_sentry    else []) +
-            (["fullstory"] if config.simulate_fullstory else [])
+            (["fullstory"] if config.simulate_fullstory else []) +
+            (["zendesk"]   if config.simulate_zendesk   else [])
         )
 
         inserted_any = False
         for source in sources:
-            other_sources = [s for s in ("stripe", "sentry", "fullstory") if s != source]
+            other_sources = [s for s in ("stripe", "sentry", "fullstory", "zendesk") if s != source]
             ctx_result = await db.execute(
                 select(Event)
                 .where(Event.project_id == project.id, Event.source.in_(other_sources))

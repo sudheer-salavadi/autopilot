@@ -14,6 +14,7 @@ class ScoringConfigOut(BaseModel):
     simulate_stripe: bool
     simulate_sentry: bool
     simulate_fullstory: bool
+    simulate_zendesk: bool
 
     model_config = {"from_attributes": True}
 

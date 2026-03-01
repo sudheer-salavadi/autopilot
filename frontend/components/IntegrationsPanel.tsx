@@ -30,8 +30,8 @@ export interface Project {
 const DEFAULT_GITHUB_CONFIG: GithubConfig = {
   project_id: "",
   repo: null,
-  has_token: false,
-  has_webhook_secret: false,
+  installation_id: null,
+  is_installed: false,
   autopilot_enabled: false,
   autopilot_min_score: 0.7,
 };
@@ -61,6 +61,11 @@ const CATALOG: { group: string; items: CatalogEntry[] }[] = [
         type: "fullstory",
         label: "FullStory",
         icon: <Image src="/integrations-icns/fullstory.svg" alt="FullStory" width={20} height={20} />,
+      },
+      {
+        type: "zendesk",
+        label: "Zendesk",
+        icon: <Image src="/integrations-icns/zendesk.svg" alt="Zendesk" width={20} height={20} />,
       },
     ],
   },
@@ -98,11 +103,11 @@ function IntegrationsOverview() {
           <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-3">Pipeline</p>
           <div className="flex items-center gap-2 flex-wrap">
             {[
-              { label: "Your tools", sub: "Stripe · Sentry · FullStory", dim: false },
+              { label: "Your tools", sub: "Stripe · Sentry · FullStory · Zendesk", dim: false },
               null,
               { label: "Raw events", sub: "Webhooks or simulation", dim: true },
               null,
-              { label: "Clustering", sub: "LLM groups by root cause", dim: true },
+              { label: "Clustering", sub: "Autopilot groups by root cause", dim: true },
               null,
               { label: "Issues", sub: "Scored by severity", dim: false },
             ].map((step, i) =>
@@ -160,17 +165,19 @@ export default function IntegrationsPanel({
   initialIntegrations,
   initialSimulatingTypes = [],
   initialGithubConfig,
+  appSlug = "",
 }: {
   project: Project;
   initialIntegrations: Integration[];
   initialSimulatingTypes?: string[];
   initialGithubConfig?: GithubConfig;
+  appSlug?: string;
 }) {
   const [integrations, setIntegrations] = useState(initialIntegrations);
   const [selectedType, setSelectedType] = useState<string | null>(null);
   const [simulatingTypes, setSimulatingTypes] = useState<Set<string>>(new Set(initialSimulatingTypes));
   const [githubConnected, setGithubConnected] = useState(
-    !!(initialGithubConfig?.has_token && initialGithubConfig?.repo)
+    !!(initialGithubConfig?.is_installed && initialGithubConfig?.repo)
   );
   const api = apiClient();
 
@@ -281,8 +288,9 @@ export default function IntegrationsPanel({
                 <GitHubConfig
                   slug={project.slug}
                   initialConfig={initialGithubConfig ?? DEFAULT_GITHUB_CONFIG}
+                  appSlug={appSlug}
                   onConfigSaved={(cfg) =>
-                    setGithubConnected(!!(cfg.has_token && cfg.repo))
+                    setGithubConnected(!!(cfg.is_installed && cfg.repo))
                   }
                 />
               </div>

@@ -18,7 +18,8 @@ def _summarize(event: Event, cross_channel: bool = True) -> str:
     data = p.get("data", {})
     evt = data.get("event", {})
     exc_values = evt.get("exception", {}).get("values", [{}])
-    exc_type = exc_values[0].get("type", "unknown") if exc_values else "unknown"
+    # Sentry chains exceptions innermost-last; [-1] is the root cause, [0] is the wrapper
+    exc_type = exc_values[-1].get("type", "unknown") if exc_values else "unknown"
     level = data.get("issue", {}).get("level", evt.get("level", "error"))
     if cross_channel:
         user_email = evt.get("user", {}).get("email", "unknown")
@@ -37,7 +38,7 @@ def _rich_line(event: Event) -> str:
     data = p.get("data", {})
     evt = data.get("event", {})
     exc_values = evt.get("exception", {}).get("values", [{}])
-    exc = exc_values[0] if exc_values else {}
+    exc = exc_values[-1] if exc_values else {}  # root cause, not outermost wrapper
     parts = [event.event_type]
     exc_type = exc.get("type", "")
     exc_value = exc.get("value", "")

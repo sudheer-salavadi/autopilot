@@ -27,6 +27,7 @@ export interface Cluster {
   status: "open" | "investigating" | "resolved";
   created_at: string;
   updated_at: string;
+  pm_insight: string | null;
   parent_cluster_id: string | null;
   regression_count: number;
   github_issue_number: number | null;

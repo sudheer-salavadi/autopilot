@@ -1,59 +1,107 @@
 "use client";
 
-import { useState } from "react";
-import { IconBrandGithub, IconCheck, IconCircleFilled, IconCopy, IconExternalLink } from "@tabler/icons-react";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import {
+  IconBrandGithub,
+  IconCheck,
+  IconCircleFilled,
+  IconExternalLink,
+  IconLoader2,
+  IconRefresh,
+} from "@tabler/icons-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { apiClient } from "@/lib/api";
 
 export interface GithubConfig {
   project_id: string;
   repo: string | null;
-  has_token: boolean;
-  has_webhook_secret: boolean;
+  installation_id: number | null;
+  is_installed: boolean;
   autopilot_enabled: boolean;
   autopilot_min_score: number;
+}
+
+interface Repo {
+  full_name: string;
+  private: boolean;
 }
 
 export default function GitHubConfig({
   slug,
   initialConfig,
+  appSlug,
   onConfigSaved,
 }: {
   slug: string;
   initialConfig: GithubConfig;
+  appSlug: string;
   onConfigSaved?: (config: GithubConfig) => void;
 }) {
+  const searchParams = useSearchParams();
   const [config, setConfig] = useState(initialConfig);
-  const [repo, setRepo] = useState(initialConfig.repo ?? "");
-  const [token, setToken] = useState("");
-  const [webhookSecret, setWebhookSecret] = useState("");
+  const [repos, setRepos] = useState<Repo[]>([]);
+  const [reposLoading, setReposLoading] = useState(false);
+  const [selectedRepo, setSelectedRepo] = useState(initialConfig.repo ?? "");
   const [saving, setSaving] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [verifyResult, setVerifyResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
+  const [connectedFlash, setConnectedFlash] = useState(false);
 
   const api = apiClient();
 
-  const handleSave = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // Flash "GitHub App connected" when redirected back from callback
+  useEffect(() => {
+    if (searchParams.get("github") === "connected") {
+      setConnectedFlash(true);
+      setTimeout(() => setConnectedFlash(false), 5000);
+    }
+  }, [searchParams]);
+
+  // Fetch accessible repos whenever the app is installed
+  const fetchRepos = async () => {
+    if (!config.is_installed) return;
+    setReposLoading(true);
+    try {
+      const data = await api.get<Repo[]>(`/api/projects/${slug}/github-config/repos`);
+      setRepos(data);
+    } catch {
+      setRepos([]);
+    } finally {
+      setReposLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchRepos();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config.is_installed]);
+
+  const installUrl = appSlug
+    ? `https://github.com/apps/${appSlug}/installations/new?state=${slug}`
+    : "#";
+
+  const handleSaveRepo = async () => {
     setError("");
     setSaving(true);
     try {
-      const body: Record<string, unknown> = { repo };
-      if (token) body.token = token;
-      if (webhookSecret) body.webhook_secret = webhookSecret;
       const updated = await api.put<GithubConfig>(
         `/api/projects/${slug}/github-config`,
-        body
+        { repo: selectedRepo }
       );
       setConfig(updated);
-      setToken("");
-      setWebhookSecret("");
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
       onConfigSaved?.(updated);
@@ -67,9 +115,12 @@ export default function GitHubConfig({
   const handleAutopilotToggle = async (enabled: boolean) => {
     setConfig((c) => ({ ...c, autopilot_enabled: enabled }));
     try {
-      await api.put(`/api/projects/${slug}/github-config`, {
-        autopilot_enabled: enabled,
-      });
+      const updated = await api.put<GithubConfig>(
+        `/api/projects/${slug}/github-config`,
+        { autopilot_enabled: enabled }
+      );
+      setConfig(updated);
+      onConfigSaved?.(updated);
     } catch {
       setConfig((c) => ({ ...c, autopilot_enabled: !enabled }));
     }
@@ -105,16 +156,7 @@ export default function GitHubConfig({
     }
   };
 
-  const isConfigured = config.has_token && !!config.repo;
-  const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-  const webhookUrl = `${API_URL}/api/webhooks/${config.project_id}/github`;
-
-  const [copiedWebhook, setCopiedWebhook] = useState(false);
-  function copyWebhookUrl() {
-    navigator.clipboard.writeText(webhookUrl);
-    setCopiedWebhook(true);
-    setTimeout(() => setCopiedWebhook(false), 2000);
-  }
+  const isConnected = config.is_installed && !!config.repo;
 
   return (
     <div className="max-w-lg space-y-6">
@@ -129,123 +171,143 @@ export default function GitHubConfig({
         </div>
         <div className="ml-auto flex items-center gap-1.5">
           <IconCircleFilled
-            className={`size-2 ${isConfigured ? "text-emerald-500" : "text-muted-foreground/40"}`}
+            className={`size-2 ${isConnected ? "text-emerald-500" : "text-muted-foreground/40"}`}
           />
           <span className="text-xs text-muted-foreground">
-            {isConfigured ? "Connected" : "Not configured"}
+            {isConnected ? `Connected to ${config.repo}` : config.is_installed ? "Installed — select repo" : "Not installed"}
           </span>
         </div>
       </div>
 
+      {connectedFlash && (
+        <div className="flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 dark:bg-emerald-950/20 dark:border-emerald-900 px-3 py-2">
+          <IconCheck className="size-3.5 text-emerald-600 shrink-0" />
+          <p className="text-xs text-emerald-700 dark:text-emerald-400">
+            GitHub App connected successfully.
+          </p>
+        </div>
+      )}
+
       <Separator />
 
-      {/* Connection form */}
-      <form onSubmit={handleSave} className="space-y-4">
-        <div className="space-y-1.5">
-          <Label htmlFor="gh-repo" className="text-xs">
-            Repository
-          </Label>
-          <Input
-            id="gh-repo"
-            value={repo}
-            onChange={(e) => setRepo(e.target.value)}
-            placeholder="owner/repo"
-            className="font-mono text-xs h-8"
-          />
-          <p className="text-[11px] text-muted-foreground">
-            e.g. <span className="font-mono">acme/backend</span>
+      {/* Install section */}
+      <div className="space-y-3">
+        <div>
+          <p className="text-xs font-medium">GitHub App Installation</p>
+          <p className="text-[11px] text-muted-foreground mt-0.5">
+            Install the Autopilot GitHub App to grant fine-grained access to your
+            repositories. Tokens auto-refresh — no manual rotation needed.
           </p>
         </div>
 
-        <div className="space-y-1.5">
-          <Label htmlFor="gh-token" className="text-xs">
-            {config.has_token ? "Rotate Token" : "Personal Access Token"}
-          </Label>
-          <Input
-            id="gh-token"
-            type="password"
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            placeholder={config.has_token ? "Leave blank to keep existing" : "ghp_…"}
-            className="font-mono text-xs h-8"
-          />
-          <p className="text-[11px] text-muted-foreground">
-            Needs <span className="font-mono">repo</span> scope (or{" "}
-            <span className="font-mono">public_repo</span> for public repos).
-            Encrypted at rest, never exposed.
-          </p>
-        </div>
-
-        {/* Webhook URL */}
-        <div className="space-y-1.5">
-          <Label className="text-xs">Webhook URL</Label>
-          <div className="flex gap-1.5">
-            <Input
-              readOnly
-              value={config.project_id ? webhookUrl : "Save repo & token first"}
-              className="font-mono text-[11px] h-8"
-            />
-            {config.project_id && (
-              <Button type="button" variant="outline" size="icon-sm" onClick={copyWebhookUrl}>
-                {copiedWebhook ? (
-                  <IconCheck className="size-3.5 text-emerald-600" />
-                ) : (
-                  <IconCopy className="size-3.5" />
-                )}
-              </Button>
-            )}
-          </div>
-          <p className="text-[11px] text-muted-foreground">
-            Paste this URL into your GitHub repo → Settings → Webhooks.
-            Select the <span className="font-mono">Issues</span> event.
-          </p>
-        </div>
-
-        <div className="space-y-1.5">
-          <Label htmlFor="gh-webhook-secret" className="text-xs">
-            {config.has_webhook_secret ? "Rotate Webhook Secret" : "Webhook Secret"}
-          </Label>
-          <Input
-            id="gh-webhook-secret"
-            type="password"
-            value={webhookSecret}
-            onChange={(e) => setWebhookSecret(e.target.value)}
-            placeholder={config.has_webhook_secret ? "Leave blank to keep existing" : "Set a secret in GitHub, paste it here"}
-            className="font-mono text-xs h-8"
-          />
-          <p className="text-[11px] text-muted-foreground">
-            Used to verify GitHub webhook signatures. Set the same value in GitHub webhook settings.
-          </p>
-        </div>
-
-        {error && <p className="text-xs text-destructive">{error}</p>}
-
-        <div className="flex gap-2">
-          <Button type="submit" size="sm" disabled={saving}>
-            {saving ? "Saving…" : saved ? <><IconCheck className="size-3.5 mr-1" />Saved</> : "Save"}
-          </Button>
-          {isConfigured && (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={handleVerify}
-              disabled={verifying}
-            >
-              {verifying ? "Verifying…" : "Test connection"}
-            </Button>
-          )}
-        </div>
-
-        {verifyResult && (
-          <p
-            className={`text-xs ${verifyResult.ok ? "text-emerald-600" : "text-destructive"}`}
+        <a
+          href={installUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1.5 text-xs font-medium"
+        >
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={!appSlug}
+            asChild
           >
-            {verifyResult.ok ? "✓ " : "✗ "}
-            {verifyResult.message}
+            <span>
+              <IconBrandGithub className="size-3.5" />
+              {config.is_installed ? "Reinstall / change org" : "Install GitHub App"}
+              <IconExternalLink className="size-3 ml-0.5 text-muted-foreground" />
+            </span>
+          </Button>
+        </a>
+
+        {!appSlug && (
+          <p className="text-[11px] text-amber-600">
+            NEXT_PUBLIC_GITHUB_APP_SLUG is not set. Configure the env var to enable this button.
           </p>
         )}
-      </form>
+      </div>
+
+      {/* Repo selector — only shown when installed */}
+      {config.is_installed && (
+        <>
+          <Separator />
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <Label className="text-xs">Repository</Label>
+              <button
+                type="button"
+                onClick={fetchRepos}
+                className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+                disabled={reposLoading}
+              >
+                <IconRefresh className={`size-3 ${reposLoading ? "animate-spin" : ""}`} />
+                Refresh
+              </button>
+            </div>
+
+            {reposLoading ? (
+              <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                <IconLoader2 className="size-3.5 animate-spin" />
+                Loading repositories…
+              </div>
+            ) : (
+              <Select value={selectedRepo} onValueChange={setSelectedRepo}>
+                <SelectTrigger className="h-8 text-xs font-mono">
+                  <SelectValue placeholder="Select a repository…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {repos.length === 0 ? (
+                    <div className="px-2 py-3 text-xs text-muted-foreground">
+                      No repositories found. Check your installation permissions.
+                    </div>
+                  ) : (
+                    repos.map((r) => (
+                      <SelectItem key={r.full_name} value={r.full_name} className="text-xs font-mono">
+                        {r.full_name}
+                        {r.private && (
+                          <span className="ml-2 text-[10px] text-muted-foreground">private</span>
+                        )}
+                      </SelectItem>
+                    ))
+                  )}
+                </SelectContent>
+              </Select>
+            )}
+
+            {error && <p className="text-xs text-destructive">{error}</p>}
+
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                size="sm"
+                onClick={handleSaveRepo}
+                disabled={saving || !selectedRepo}
+              >
+                {saving ? "Saving…" : saved ? <><IconCheck className="size-3.5 mr-1" />Saved</> : "Save"}
+              </Button>
+              {isConnected && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleVerify}
+                  disabled={verifying}
+                >
+                  {verifying ? "Verifying…" : "Test connection"}
+                </Button>
+              )}
+            </div>
+
+            {verifyResult && (
+              <p className={`text-xs ${verifyResult.ok ? "text-emerald-600" : "text-destructive"}`}>
+                {verifyResult.ok ? "✓ " : "✗ "}
+                {verifyResult.message}
+              </p>
+            )}
+          </div>
+        </>
+      )}
 
       <Separator />
 
@@ -254,7 +316,7 @@ export default function GitHubConfig({
         <div>
           <h3 className="text-sm font-medium">Autopilot Mode</h3>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Automatically file GitHub issues when an issue exceeds the priority
+            Automatically file GitHub issues when a cluster exceeds the priority
             threshold. Regressions reopen the original issue.
           </p>
         </div>
@@ -267,7 +329,7 @@ export default function GitHubConfig({
             id="autopilot-toggle"
             checked={config.autopilot_enabled}
             onCheckedChange={handleAutopilotToggle}
-            disabled={!isConfigured}
+            disabled={!isConnected}
           />
         </div>
 
@@ -298,9 +360,9 @@ export default function GitHubConfig({
           </div>
         )}
 
-        {!isConfigured && (
+        {!isConnected && (
           <p className="text-[11px] text-muted-foreground">
-            Configure repo and token above to enable Autopilot.
+            Install the GitHub App and select a repository above to enable Autopilot.
           </p>
         )}
       </div>
@@ -313,14 +375,10 @@ export default function GitHubConfig({
           include: root cause, signal breakdown, affected users, severity score, and a link
           back to this dashboard.
         </p>
-        <a
-          href="https://github.com/settings/tokens/new?scopes=repo"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 text-foreground/60 hover:text-foreground transition-colors"
-        >
-          Create a token on GitHub <IconExternalLink className="size-3" />
-        </a>
+        <p>
+          The GitHub App uses fine-grained permissions (Issues: Read &amp; Write) and
+          auto-refreshing installation tokens — no personal access tokens needed.
+        </p>
       </div>
     </div>
   );

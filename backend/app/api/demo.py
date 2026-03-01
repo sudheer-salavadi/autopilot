@@ -83,8 +83,14 @@ async def toggle_simulation(
     deps=Depends(require_project_member),
     db: AsyncSession = Depends(get_db),
 ):
-    if source not in ("stripe", "sentry", "fullstory"):
-        raise HTTPException(status_code=400, detail="source must be stripe, sentry, or fullstory")
+    field_map = {
+        "stripe":    "simulate_stripe",
+        "sentry":    "simulate_sentry",
+        "fullstory": "simulate_fullstory",
+        "zendesk":   "simulate_zendesk",
+    }
+    if source not in field_map:
+        raise HTTPException(status_code=400, detail=f"source must be one of: {', '.join(field_map)}")
 
     project, _, _ = deps
 
@@ -97,11 +103,6 @@ async def toggle_simulation(
         db.add(config)
         await db.flush()
 
-    field_map = {
-        "stripe": "simulate_stripe",
-        "sentry": "simulate_sentry",
-        "fullstory": "simulate_fullstory",
-    }
     setattr(config, field_map[source], body.active)
     await db.commit()
     return {"active": body.active}
