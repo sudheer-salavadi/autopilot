@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { IconArrowDown, IconArrowUp, IconArrowsUpDown, IconBrandGithub, IconCheck, IconChevronDown, IconChevronLeft, IconChevronRight, IconChevronUp, IconChevronsDown, IconChevronsUp, IconExternalLink, IconHelpCircle, IconMinus, IconRefresh, IconSearch, IconX } from "@tabler/icons-react";
+import { IconArrowDown, IconArrowUp, IconArrowsUpDown, IconBrandGithub, IconZoomQuestion, IconSparkles, IconCheck, IconChevronDown, IconChevronLeft, IconChevronRight, IconChevronUp, IconChevronsDown, IconChevronsUp, IconExternalLink, IconHelpCircle, IconMinus, IconRefresh, IconSearch, IconX } from "@tabler/icons-react";
 import { JsonBlock } from "@/components/JsonBlock";
 import { type Cluster, type ClusterEvent, type ClustersPage, type ClustersParams, useClusters } from "@/lib/hooks/useClusters";
 import { apiClient } from "@/lib/api";
@@ -694,24 +694,20 @@ function ClusterDetail({
 
         {/* overview */}
         {tab === "overview" && (
-          <div className="p-4 space-y-5 text-sm">
-
-            {/* PM Insight — the "what to do" synthesis */}
-            {cluster.pm_insight && (
-              <div className="rounded-md border border-blue-200 dark:border-blue-900 bg-blue-50 dark:bg-blue-950/30 px-3.5 py-3 space-y-1.5">
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-blue-600 dark:text-blue-400">
-                  Autopilot Recommendation
-                </p>
-                <p className="text-xs leading-relaxed text-foreground">
-                  {cluster.pm_insight}
-                </p>
-              </div>
-            )}
+          <div className="p-4 space-y-5 text-sm">            
 
             <div>
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">What&apos;s happening</p>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1"> <IconZoomQuestion className="inline mr-1 size-3" /> What&apos;s happening</p>
               <p className="leading-relaxed">{formatRootCause(cluster.root_cause)}</p>
             </div>
+
+          {/* PM Insight — the "what to do" synthesis */}
+            {cluster.pm_insight && (
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1"><IconSparkles className="inline mr-1 size-3" />Recommended Solution</p>
+              <p className="leading-relaxed">{cluster.pm_insight}</p>
+            </div>
+            )}      
 
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Impact</p>
