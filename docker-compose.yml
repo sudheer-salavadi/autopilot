@@ -27,11 +27,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    volumes:
-      - ./backend:/app
 
   frontend:
-    profiles: ["prod"]
     build: ./frontend
     restart: unless-stopped
     env_file: .env
