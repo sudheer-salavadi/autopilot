@@ -67,11 +67,60 @@ async def lifespan(app: FastAPI):
                 pass
             await asyncio.sleep(3)
 
+    async def background_mcp_puller():
+        """Auto-sync Stripe MCP integrations every 5 minutes."""
+        from sqlalchemy import and_
+        from app.models.integration import Integration, IntegrationType
+        from app.services.stripe_pull import pull_stripe_events
+        from app.services.outbox import enqueue_evaluation
+        from datetime import datetime, timezone
+
+        while True:
+            await asyncio.sleep(300)  # wait first, then pull
+            try:
+                async with AsyncSessionLocal() as db:
+                    result = await db.execute(
+                        select(Integration).where(
+                            and_(
+                                Integration.type == IntegrationType.stripe,
+                                Integration.is_active == True,  # noqa: E712
+                            )
+                        )
+                    )
+                    integrations = result.scalars().all()
+                    any_pulled = False
+                    for integration in integrations:
+                        if (integration.config or {}).get("mode") != "mcp":
+                            continue
+                        if not integration.webhook_secret:
+                            continue
+                        try:
+                            pulled = await pull_stripe_events(
+                                api_key=integration.webhook_secret,
+                                project_id=integration.project_id,
+                                integration_id=integration.id,
+                                db=db,
+                            )
+                            if pulled > 0:
+                                await enqueue_evaluation(integration.project_id, db)
+                                any_pulled = True
+                            updated_config = dict(integration.config or {})
+                            updated_config["last_mcp_sync"] = datetime.now(timezone.utc).isoformat()
+                            integration.config = updated_config
+                            db.add(integration)
+                        except Exception:
+                            pass
+                    if any_pulled or integrations:
+                        await db.commit()
+            except Exception:
+                pass
+
     outbox_task    = asyncio.create_task(background_outbox_worker())
     evaluator_task = asyncio.create_task(background_evaluator())
     simulator_task = asyncio.create_task(background_simulator())
+    mcp_puller_task = asyncio.create_task(background_mcp_puller())
     yield
-    for task in (outbox_task, evaluator_task, simulator_task):
+    for task in (outbox_task, evaluator_task, simulator_task, mcp_puller_task):
         task.cancel()
         try:
             await task

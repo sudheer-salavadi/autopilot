@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -69,3 +70,60 @@ async def update_integration(
 
     db.add(integration)
     return integration
+
+
+@router.post("/stripe/mcp-sync")
+async def stripe_mcp_sync(
+    deps=Depends(require_project_owner),
+    db: AsyncSession = Depends(get_db),
+):
+    """Pull recent Stripe failures via the Stripe API (MCP pull mode).
+
+    Requires an active Stripe integration with config.mode == "mcp" and a
+    Stripe secret key stored in webhook_secret.
+    """
+    from app.services.stripe_pull import pull_stripe_events
+    from app.services.outbox import enqueue_evaluation
+
+    project, _, __ = deps
+
+    result = await db.execute(
+        select(Integration).where(
+            Integration.project_id == project.id,
+            Integration.type == "stripe",
+            Integration.is_active == True,  # noqa: E712
+        )
+    )
+    integration = result.scalar_one_or_none()
+    if not integration:
+        raise HTTPException(status_code=404, detail="No active Stripe integration found")
+
+    if (integration.config or {}).get("mode") != "mcp":
+        raise HTTPException(
+            status_code=400,
+            detail="Stripe integration is not in MCP mode. Switch mode to MCP to use this endpoint.",
+        )
+    if not integration.webhook_secret:
+        raise HTTPException(status_code=400, detail="Stripe API key not configured")
+
+    try:
+        pulled = await pull_stripe_events(
+            api_key=integration.webhook_secret,
+            project_id=project.id,
+            integration_id=integration.id,
+            db=db,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    # Record last sync time in integration config
+    updated_config = dict(integration.config or {})
+    updated_config["last_mcp_sync"] = datetime.now(timezone.utc).isoformat()
+    integration.config = updated_config
+    db.add(integration)
+
+    if pulled > 0:
+        await enqueue_evaluation(project.id, db)
+
+    await db.commit()
+    return {"pulled": pulled}
