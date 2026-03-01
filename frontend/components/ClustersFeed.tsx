@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { IconBrandGithub, IconExternalLink, IconFilter, IconRefresh, IconX } from "@tabler/icons-react";
+import { IconBrandGithub, IconExternalLink, IconFilter, IconRefresh, IconSearch, IconX } from "@tabler/icons-react";
 import { JsonBlock } from "@/components/JsonBlock";
 import { type Cluster, type ClusterEvent, type ClustersPage, type ClustersParams, useClusters } from "@/lib/hooks/useClusters";
 import { apiClient } from "@/lib/api";
@@ -365,8 +365,8 @@ function ClusterDetail({
             {cluster.event_count} events · {cluster.affected_users} user{cluster.affected_users !== 1 ? "s" : ""} · last seen {timeAgo(cluster.last_seen)}
           </p>
 
-          {/* GitHub issue actions */}
-          <div className="mt-2 flex items-center gap-2 flex-wrap">
+          {/* Actions row — GitHub + Resolve on one line, wraps if needed */}
+          <div className="mt-2 flex items-center gap-x-3 gap-y-1 flex-wrap">
             {cluster.github_issue_number ? (
               <a
                 href={cluster.github_issue_url ?? "#"}
@@ -388,20 +388,19 @@ function ClusterDetail({
                 {filingIssue ? "Filing…" : "Create GitHub issue"}
               </button>
             )}
+
+            {cluster.status !== "resolved" && (
+              <button
+                onClick={handleResolve}
+                disabled={resolving}
+                className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-emerald-600 transition-colors disabled:opacity-50"
+              >
+                {resolving ? "Resolving…" : "✓ Mark as resolved"}
+              </button>
+            )}
           </div>
           {issueError && (
             <p className="text-[11px] text-destructive mt-1">{issueError}</p>
-          )}
-
-          {/* Resolve — only show for open/investigating clusters */}
-          {cluster.status !== "resolved" && (
-            <button
-              onClick={handleResolve}
-              disabled={resolving}
-              className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-emerald-600 transition-colors disabled:opacity-50"
-            >
-              {resolving ? "Resolving…" : "✓ Mark as resolved"}
-            </button>
           )}
         </div>
         {showClose && (
@@ -614,7 +613,7 @@ function ClusterDetail({
                   </div>
                 ))}
                 <div className="flex items-center justify-between px-3 py-2 bg-muted/40 font-semibold">
-                  <span className="text-muted-foreground">Priority score</span>
+                  <span className="text-muted-foreground">Severity score</span>
                   <span>{cluster.priority_score.toFixed(4)}</span>
                 </div>
               </div>
@@ -718,13 +717,12 @@ export default function ClustersFeed({
   // ── view / filter state ───────────────────────────────────────────────────
   const [view, setView]             = useState<"active" | "resolved">("active");
   const [filterSource, setSource]   = useState("");
-  const [minScore, setMinScore]     = useState(0);
+  const [search, setSearch]         = useState("");
   const [showFilters, setShowFilters] = useState(false);
 
   const params: ClustersParams = {
     view,
     source: filterSource || undefined,
-    min_score: minScore > 0 ? minScore : undefined,
   };
 
   const { data, loading, error, refetch } = useClusters(slug, initialData, params);
@@ -764,7 +762,7 @@ export default function ClustersFeed({
   }
 
   // Reset selection when view/filters change
-  useEffect(() => { setSelected(new Set()); setActiveCluster(null); }, [view, filterSource, minScore]);
+  useEffect(() => { setSelected(new Set()); setActiveCluster(null); }, [view, filterSource, search]);
 
   // Apply optimistic updates to a cluster (e.g. after filing a GitHub issue)
   function handleClusterUpdated(id: string, patch: Partial<Cluster>) {
@@ -777,7 +775,13 @@ export default function ClustersFeed({
     }
   }
 
-  const clusters = data?.items ?? [];
+  const allClusters = data?.items ?? [];
+  const q = search.trim().toLowerCase();
+  const clusters = q
+    ? allClusters.filter((c) =>
+        c.title.toLowerCase().includes(q) || c.root_cause.toLowerCase().includes(q)
+      )
+    : allClusters;
   const allSelected = clusters.length > 0 && selected.size === clusters.length;
   const someSelected = selected.size > 0 && !allSelected;
 
@@ -814,10 +818,10 @@ export default function ClustersFeed({
     }
   }
 
-  const hasActiveFilters = filterSource !== "" || minScore > 0;
+  const hasActiveFilters = filterSource !== "" || search !== "";
 
   return (
-    <div className={`flex items-start${isDragging ? " select-none" : ""}`}>
+    <div className={`flex -mt-10 items-start${isDragging ? " select-none" : ""}`}>
       {/* left column */}
       <div className="flex-1 min-w-0 space-y-3">
 
@@ -833,12 +837,7 @@ export default function ClustersFeed({
                   : "border-transparent text-muted-foreground hover:text-foreground"
               }`}
             >
-              {v === "active" ? "Active" : "Resolved"}
-              {data && view === v && (
-                <span className="ml-1.5 text-[11px] text-muted-foreground font-mono">
-                  ({data.total})
-                </span>
-              )}
+              {v === "active" ? "Open" : "Resolved"}
             </button>
           ))}
         </div>
@@ -868,7 +867,7 @@ export default function ClustersFeed({
                   Filters
                   {hasActiveFilters && (
                     <span className="ml-0.5 rounded-full bg-foreground text-background text-[10px] px-1 leading-4">
-                      {(filterSource ? 1 : 0) + (minScore > 0 ? 1 : 0)}
+                      {(filterSource ? 1 : 0) + (search ? 1 : 0)}
                     </span>
                   )}
                 </button>
@@ -921,26 +920,27 @@ export default function ClustersFeed({
               </div>
             </div>
 
-            {/* Min score slider */}
+            {/* Search */}
             <div className="flex items-center gap-3">
-              <span className="text-xs text-muted-foreground w-16 shrink-0">Min score</span>
-              <input
-                type="range"
-                min={0}
-                max={1}
-                step={0.05}
-                value={minScore}
-                onChange={(e) => setMinScore(parseFloat(e.target.value))}
-                className="flex-1 accent-foreground"
-              />
-              <span className="text-xs font-mono w-8 text-right">
-                {minScore > 0 ? (minScore * 10).toFixed(1) : "off"}
-              </span>
-              {minScore > 0 && (
-                <button onClick={() => setMinScore(0)} className="text-[11px] text-muted-foreground hover:text-foreground transition-colors">
-                  Reset
-                </button>
-              )}
+              <span className="text-xs text-muted-foreground w-16 shrink-0">Search</span>
+              <div className="relative flex-1">
+                <IconSearch className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground pointer-events-none" />
+                <input
+                  type="text"
+                  placeholder="Filter by title or root cause…"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="w-full rounded-md border border-input bg-background pl-8 pr-3 py-1.5 text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                />
+                {search && (
+                  <button
+                    onClick={() => setSearch("")}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <IconX className="size-3" />
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -994,7 +994,7 @@ export default function ClustersFeed({
                       />
                     </th>
                   )}
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground w-24">Priority</th>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground w-24">Severity</th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground">Issue</th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground w-20">Events</th>
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground w-20">Users</th>
@@ -1034,9 +1034,31 @@ export default function ClustersFeed({
                     <td className="px-3 py-3 text-muted-foreground">
                       {view === "resolved" ? timeAgo(cluster.updated_at) : timeAgo(cluster.last_seen)}
                     </td>
-                    <td className="px-3 py-3">{statusBadge(cluster.status)}</td>
+                    <td className="px-3 py-3">
+                      <div className="flex items-center gap-1.5">
+                        {statusBadge(cluster.status)}
+                        {cluster.status === "resolved" && cluster.github_issue_number && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <a
+                                href={cluster.github_issue_url ?? "#"}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                                className="text-muted-foreground/60 hover:text-foreground transition-colors"
+                              >
+                                <IconBrandGithub className="size-3.5" />
+                              </a>
+                            </TooltipTrigger>
+                            <TooltipContent side="top">
+                              Resolved by closing GitHub #{cluster.github_issue_number}
+                            </TooltipContent>
+                          </Tooltip>
+                        )}
+                      </div>
+                    </td>
                     <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
-                      {cluster.github_issue_number && (
+                      {cluster.github_issue_number && cluster.status !== "resolved" && (
                         <a
                           href={cluster.github_issue_url ?? "#"}
                           target="_blank"

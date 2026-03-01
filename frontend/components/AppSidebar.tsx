@@ -115,6 +115,17 @@ export default function AppSidebar({
                       Overview
                     </Link>
                   </SidebarMenuButton>
+                </SidebarMenuItem>                
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    asChild
+                    isActive={pathname === `/projects/${currentSlug}/issues`}
+                  >
+                    <Link href={`/projects/${currentSlug}/issues`}>
+                      <IconLayersIntersect />
+                      Issues
+                    </Link>
+                  </SidebarMenuButton>
                 </SidebarMenuItem>
                 <SidebarMenuItem>
                   <SidebarMenuButton
@@ -124,17 +135,6 @@ export default function AppSidebar({
                     <Link href={`/projects/${currentSlug}/integrations`}>
                       <IconPuzzle />
                       Integrations
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-                <SidebarMenuItem>
-                  <SidebarMenuButton
-                    asChild
-                    isActive={pathname === `/projects/${currentSlug}/issues`}
-                  >
-                    <Link href={`/projects/${currentSlug}/issues`}>
-                      <IconLayersIntersect />
-                      Issues
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>

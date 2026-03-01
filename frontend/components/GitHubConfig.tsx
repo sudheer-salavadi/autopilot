@@ -274,7 +274,7 @@ export default function GitHubConfig({
         {config.autopilot_enabled && (
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <Label className="text-xs">Min priority score</Label>
+              <Label className="text-xs">Min severity score</Label>
               <span className="text-xs font-mono text-muted-foreground">
                 {(config.autopilot_min_score * 10).toFixed(1)} / 10
               </span>
@@ -310,7 +310,7 @@ export default function GitHubConfig({
       <div className="text-[11px] text-muted-foreground space-y-1">
         <p>
           Issues are filed with the <span className="font-mono">autopilot</span> label and
-          include: root cause, signal breakdown, affected users, priority score, and a link
+          include: root cause, signal breakdown, affected users, severity score, and a link
           back to this dashboard.
         </p>
         <a

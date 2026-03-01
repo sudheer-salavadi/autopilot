@@ -11,7 +11,6 @@ const NEGATIVE_PATTERNS: RegExp[] = [
   // Stripe — failed / disputed payments
   /"status"\s*:\s*"(failed|payment_failed|canceled|cancelled|requires_action)"/i,
   /"disputed"\s*:\s*true/i,
-  /"refunded"\s*:\s*true/i,
   // FullStory — frustration signals
   /"frustration_type"\s*:\s*"(rage_click|thrash|error_click|dead_click)"/i,
   // Generic — unresolved errors

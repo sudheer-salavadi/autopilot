@@ -139,7 +139,7 @@ export default function ProjectDashboard({
           icon={<IconAlertTriangle className="size-4" />}
           label="Critical"
           value={cluster_stats.critical}
-          sub="priority score ≥ 7"
+          sub="severity score ≥ 7"
           accent={cluster_stats.critical > 0 ? "text-red-500" : ""}
         />
         <StatCard

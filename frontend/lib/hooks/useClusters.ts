@@ -45,14 +45,12 @@ export interface ClustersPage {
 export interface ClustersParams {
   view?: "active" | "resolved";
   source?: string;       // "stripe" | "sentry" | "fullstory" | ""
-  min_score?: number;    // 0.0–1.0; omitted when 0
 }
 
 function buildQs(params: ClustersParams): string {
   const q = new URLSearchParams();
   if (params.view && params.view !== "active") q.set("view", params.view);
   if (params.source) q.set("source", params.source);
-  if (params.min_score && params.min_score > 0) q.set("min_score", String(params.min_score));
   const s = q.toString();
   return s ? `?${s}` : "";
 }

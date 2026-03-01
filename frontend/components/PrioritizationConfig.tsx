@@ -63,94 +63,100 @@ export default function PrioritizationConfig({
   }
 
   return (
-    <div className="space-y-6 max-w-md">
-      <div className="space-y-1">
-        <h2 className="text-base font-semibold">Priority Weights</h2>
-        <p className="text-sm text-muted-foreground">
-          Values must sum to 100%.
-        </p>
-      </div>
+    <div className="space-y-4 max-w-md">
 
-      <div className="space-y-4">
-        <div className="space-y-1.5">
-          <Label htmlFor="revenue">Revenue Impact (%)</Label>
-          <Input
-            id="revenue"
-            type="number"
-            min={1}
-            max={98}
-            value={revenue}
-            onChange={(e) => setRevenue(Number(e.target.value))}
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="frequency">Frequency (%)</Label>
-          <Input
-            id="frequency"
-            type="number"
-            min={1}
-            max={98}
-            value={frequency}
-            onChange={(e) => setFrequency(Number(e.target.value))}
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="ux">UX Impact (%)</Label>
-          <Input
-            id="ux"
-            type="number"
-            min={1}
-            max={98}
-            value={ux}
-            onChange={(e) => setUx(Number(e.target.value))}
-          />
-        </div>
-      </div>
-
-      <div
-        className={`rounded-md border px-3 py-2 text-sm font-mono ${
-          total === 100
-            ? "border-green-500/40 bg-green-500/10 text-green-700 dark:text-green-400"
-            : "border-destructive/40 bg-destructive/10 text-destructive"
-        }`}
-      >
-        {total === 100
-          ? `Score = (Rev × ${(revenue / 100).toFixed(2)}) + (Freq × ${(frequency / 100).toFixed(2)}) + (UX × ${(ux / 100).toFixed(2)})`
-          : `Sum = ${total}% — must equal 100%`}
-      </div>
-
-      <div className="space-y-4 pt-2 border-t">
+      {/* Card 1 — Severity Weights */}
+      <div className="rounded-lg border bg-card p-5 space-y-4">
         <div className="space-y-1">
-          <h3 className="text-sm font-semibold">Normalization Caps</h3>
+          <h2 className="text-sm font-semibold">Severity Weights</h2>
           <p className="text-xs text-muted-foreground">
-            Revenue and frequency are normalized against these maximums.
+            How much each signal contributes to the severity score. Must sum to 100%.
           </p>
         </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="maxRevenue">Max Revenue (USD)</Label>
-          <Input
-            id="maxRevenue"
-            type="number"
-            min={1}
-            value={maxRevenue}
-            onChange={(e) => setMaxRevenue(Number(e.target.value))}
-          />
+
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <Label htmlFor="revenue">Revenue Impact (%)</Label>
+            <Input
+              id="revenue"
+              type="number"
+              min={1}
+              max={98}
+              value={revenue}
+              onChange={(e) => setRevenue(Number(e.target.value))}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="frequency">Frequency (%)</Label>
+            <Input
+              id="frequency"
+              type="number"
+              min={1}
+              max={98}
+              value={frequency}
+              onChange={(e) => setFrequency(Number(e.target.value))}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="ux">UX Impact (%)</Label>
+            <Input
+              id="ux"
+              type="number"
+              min={1}
+              max={98}
+              value={ux}
+              onChange={(e) => setUx(Number(e.target.value))}
+            />
+          </div>
         </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="maxFreq">Max Event Count</Label>
-          <Input
-            id="maxFreq"
-            type="number"
-            min={1}
-            value={maxFreq}
-            onChange={(e) => setMaxFreq(Number(e.target.value))}
-          />
+
+        <div
+          className={`rounded-md border px-3 py-2 text-xs font-mono ${
+            total === 100
+              ? "border-green-500/40 bg-green-500/10 text-green-700 dark:text-green-400"
+              : "border-destructive/40 bg-destructive/10 text-destructive"
+          }`}
+        >
+          {total === 100
+            ? `Score = (Rev × ${(revenue / 100).toFixed(2)}) + (Freq × ${(frequency / 100).toFixed(2)}) + (UX × ${(ux / 100).toFixed(2)})`
+            : `Sum = ${total}% — must equal 100%`}
         </div>
       </div>
 
-      {error && (
-        <p className="text-sm text-destructive">{error}</p>
-      )}
+      {/* Card 2 — Normalization Caps */}
+      <div className="rounded-lg border bg-card p-5 space-y-4">
+        <div className="space-y-1">
+          <h2 className="text-sm font-semibold">Normalization Caps</h2>
+          <p className="text-xs text-muted-foreground">
+            Revenue and frequency signals are scaled against these maximums before scoring.
+          </p>
+        </div>
+
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <Label htmlFor="maxRevenue">Max Revenue (USD)</Label>
+            <Input
+              id="maxRevenue"
+              type="number"
+              min={1}
+              value={maxRevenue}
+              onChange={(e) => setMaxRevenue(Number(e.target.value))}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="maxFreq">Max Event Count</Label>
+            <Input
+              id="maxFreq"
+              type="number"
+              min={1}
+              value={maxFreq}
+              onChange={(e) => setMaxFreq(Number(e.target.value))}
+            />
+          </div>
+        </div>
+      </div>
+
+      {error && <p className="text-sm text-destructive">{error}</p>}
 
       <Button onClick={handleSave} disabled={!isValid || saving}>
         {saving ? "Saving…" : saved ? "Saved!" : "Save"}

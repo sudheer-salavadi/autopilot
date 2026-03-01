@@ -23,6 +23,7 @@ POSITIVE_TYPES: frozenset[str] = frozenset({
     "payment_intent.created",
     "charge.succeeded",
     "charge.updated",
+    "charge.refunded",          # routine refunds are expected business activity
     "checkout.session.completed",
     "customer.created",
     "customer.updated",
@@ -41,7 +42,7 @@ POSITIVE_TYPES: frozenset[str] = frozenset({
 POSITIVE_SQL: str = ", ".join(f"'{t}'" for t in sorted(POSITIVE_TYPES))
 
 _POSITIVE_STATUSES: frozenset[str] = frozenset({
-    "paid", "succeeded", "active", "trialing", "complete",
+    "paid", "succeeded", "active", "trialing", "complete", "refunded",
 })
 
 # ── Plugin functions ───────────────────────────────────────────────────────────
