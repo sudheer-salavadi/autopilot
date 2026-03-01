@@ -131,7 +131,7 @@ export default function ProjectDashboard({
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <StatCard
           icon={<IconBug className="size-4" />}
-          label="Active Clusters"
+          label="Open Issues"
           value={cluster_stats.active}
           sub={`${cluster_stats.investigating} under investigation`}
         />
@@ -146,13 +146,13 @@ export default function ProjectDashboard({
           icon={<IconCurrencyDollar className="size-4" />}
           label="Revenue at Risk"
           value={fmtUsd(revenue_at_risk_usd)}
-          sub="across active clusters"
+          sub="across open issues"
         />
         <StatCard
           icon={<IconUsers className="size-4" />}
           label="Affected Users"
           value={affected_users.toLocaleString()}
-          sub={`${cluster_stats.resolved_30d} clusters resolved (30d)`}
+          sub={`${cluster_stats.resolved_30d} issues resolved (30d)`}
         />
       </div>
 
@@ -170,9 +170,9 @@ export default function ProjectDashboard({
           {/* ── Top Clusters ───────────────────────────────────────────── */}
           <div className="lg:col-span-2 rounded-lg border bg-card">
             <div className="flex items-center justify-between px-4 py-3 border-b">
-              <h2 className="text-sm font-semibold">Top Clusters</h2>
+              <h2 className="text-sm font-semibold">Top Issues</h2>
               <Link
-                href={`/projects/${slug}/clusters`}
+                href={`/projects/${slug}/issues`}
                 className="text-xs text-muted-foreground hover:text-foreground transition-colors"
               >
                 View all →
@@ -181,14 +181,14 @@ export default function ProjectDashboard({
 
             {top_clusters.length === 0 ? (
               <p className="px-4 py-8 text-xs text-muted-foreground text-center">
-                No active clusters yet.
+                No open issues yet.
               </p>
             ) : (
               <div className="divide-y">
                 {top_clusters.map((c) => (
                   <Link
                     key={c.id}
-                    href={`/projects/${slug}/clusters`}
+                    href={`/projects/${slug}/issues`}
                     className="flex items-start gap-3 px-4 py-3 hover:bg-muted/40 transition-colors group"
                   >
                     {/* Score pill */}
@@ -278,7 +278,7 @@ export default function ProjectDashboard({
                   <span className="font-mono">{total_events.toLocaleString()}</span>
                 </div>
                 <div className="flex justify-between text-xs">
-                  <span className="text-muted-foreground">Active clusters</span>
+                  <span className="text-muted-foreground">Open issues</span>
                   <span className="font-mono">{cluster_stats.active}</span>
                 </div>
                 <div className="flex justify-between text-xs">

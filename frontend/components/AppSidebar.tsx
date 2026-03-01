@@ -130,11 +130,11 @@ export default function AppSidebar({
                 <SidebarMenuItem>
                   <SidebarMenuButton
                     asChild
-                    isActive={pathname === `/projects/${currentSlug}/clusters`}
+                    isActive={pathname === `/projects/${currentSlug}/issues`}
                   >
-                    <Link href={`/projects/${currentSlug}/clusters`}>
+                    <Link href={`/projects/${currentSlug}/issues`}>
                       <IconLayersIntersect />
-                      Clusters
+                      Issues
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>

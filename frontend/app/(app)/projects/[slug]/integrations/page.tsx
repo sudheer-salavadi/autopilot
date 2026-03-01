@@ -4,6 +4,7 @@ import IntegrationsPanel, {
   type Project,
 } from "@/components/IntegrationsPanel";
 import { type GithubConfig } from "@/components/GitHubConfig";
+import { PageTitle } from "@/components/PageTitle";
 
 interface ScoringConfig {
   simulate_stripe: boolean;
@@ -31,14 +32,16 @@ export default async function IntegrationsPage({
   ].filter(Boolean) as string[];
 
   return (
-    <div className="-mx-6 -mt-6">
-      <h1 className="text-2xl font-bold px-4 py-2 border-b">Integrations</h1>
-      <IntegrationsPanel
-        project={project}
-        initialIntegrations={integrations}
-        initialSimulatingTypes={initialSimulatingTypes}
-        initialGithubConfig={githubConfig ?? undefined}
-      />
-    </div>
+    <>
+      <PageTitle title="Integrations" />
+      <div className="-mx-6 -mt-6 -mb-6">
+        <IntegrationsPanel
+          project={project}
+          initialIntegrations={integrations}
+          initialSimulatingTypes={initialSimulatingTypes}
+          initialGithubConfig={githubConfig ?? undefined}
+        />
+      </div>
+    </>
   );
 }

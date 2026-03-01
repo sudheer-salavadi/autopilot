@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { IconBrandGithub, IconExternalLink, IconFilter, IconRefresh, IconX } from "@tabler/icons-react";
+import { JsonBlock } from "@/components/JsonBlock";
 import { type Cluster, type ClusterEvent, type ClustersPage, type ClustersParams, useClusters } from "@/lib/hooks/useClusters";
 import { apiClient } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
@@ -12,6 +13,11 @@ import {
   SheetContent,
   SheetTitle,
 } from "@/components/ui/sheet";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -102,6 +108,21 @@ function SourceIcon({ source }: { source: string }) {
       title={source}
       className="size-4 shrink-0"
     />
+  );
+}
+
+// ── count badge with tooltip ──────────────────────────────────────────────────
+
+function CountBadge({ count, tooltip }: { count: number; tooltip: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="shrink-0 rounded bg-muted-foreground/15 px-1 text-[10px] tabular-nums text-muted-foreground cursor-help">
+          ×{count}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top">{tooltip}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -489,38 +510,46 @@ function ClusterDetail({
                               {sources.map((src) => <SourceIcon key={src} source={src} />)}
                             </div>
                             <span className="flex-1 font-mono break-all">{value}</span>
-                            <span className="shrink-0 rounded bg-muted-foreground/15 px-1 text-[10px] tabular-nums text-muted-foreground">
-                              ×{count}
-                            </span>
+                            <CountBadge
+                              count={count}
+                              tooltip={`Appeared in ${count} event${count !== 1 ? "s" : ""} — matched across ${sources.join(" + ")}`}
+                            />
                           </div>
                         ))}
                       </>
                     )}
 
                     {/* ── single-source signals ── */}
-                    {corr.singleSource.filter((r) => r.entries.length > 0).map(({ source, label, entries }) => (
-                      <div key={`${source}-${label}`} className="flex flex-col gap-2 px-3 py-2.5">
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          <SourceIcon source={source} />
-                          <span className="text-muted-foreground">{label}</span>
-                        </div>
-                        <div className="flex flex-wrap gap-1">
-                          {entries.map(([val, cnt]) => (
-                            <span
-                              key={val}
-                              onClick={() => copyToClipboard(val)}
-                              title={val}
-                              className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 font-mono cursor-pointer hover:bg-muted/60 transition-colors"
-                            >
-                              <span className="break-all">{val}</span>
-                              <span className="rounded bg-muted-foreground/15 px-1 text-[10px] tabular-nums text-muted-foreground">
-                                ×{cnt}
+                    {corr.singleSource.filter((r) => r.entries.length > 0).map(({ source, label, entries }) => {
+                      function entryTooltip(cnt: number): string {
+                        if (label === "User / Customer") return `This identifier appeared in ${cnt} event${cnt !== 1 ? "s" : ""} from ${source}`;
+                        if (label === "Page URL")        return `This page was involved in ${cnt} event${cnt !== 1 ? "s" : ""} from ${source}`;
+                        if (label === "Error type")      return `This error type occurred ${cnt} time${cnt !== 1 ? "s" : ""}`;
+                        if (label === "Frustration")     return `This frustration signal was recorded ${cnt} time${cnt !== 1 ? "s" : ""}`;
+                        return `Seen ${cnt} time${cnt !== 1 ? "s" : ""}`;
+                      }
+                      return (
+                        <div key={`${source}-${label}`} className="flex flex-col gap-2 px-3 py-2.5">
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <SourceIcon source={source} />
+                            <span className="text-muted-foreground">{label}</span>
+                          </div>
+                          <div className="flex flex-wrap gap-1">
+                            {entries.map(([val, cnt]) => (
+                              <span
+                                key={val}
+                                onClick={() => copyToClipboard(val)}
+                                title={val}
+                                className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 font-mono cursor-pointer hover:bg-muted/60 transition-colors"
+                              >
+                                <span className="break-all">{val}</span>
+                                <CountBadge count={cnt} tooltip={entryTooltip(cnt)} />
                               </span>
-                            </span>
-                          ))}
+                            ))}
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
 
                   </div>
                 );
@@ -646,9 +675,7 @@ function EventPayloadBlock({ event }: { event: ClusterEvent }) {
         <span className="text-muted-foreground ml-1">{expanded ? "▲" : "▼"}</span>
       </button>
       {expanded && (
-        <pre className="px-3 py-2 text-[11px] font-mono bg-muted/30 border-t overflow-x-auto whitespace-pre-wrap break-all leading-relaxed">
-          {JSON.stringify(event.payload, null, 2)}
-        </pre>
+        <JsonBlock value={event.payload} maxHeight="16rem" className="rounded-none border-0 border-t" />
       )}
     </div>
   );
@@ -793,7 +820,7 @@ export default function ClustersFeed({
         {/* ── Toolbar ────────────────────────────────────────────────── */}
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <p className="text-sm text-muted-foreground">
-            {data ? `${data.total} cluster${data.total !== 1 ? "s" : ""}` : ""}
+            {data ? `${data.total} issue${data.total !== 1 ? "s" : ""}` : ""}
             {selected.size > 0 && (
               <span className="ml-2 text-foreground font-medium">· {selected.size} selected</span>
             )}
@@ -913,14 +940,14 @@ export default function ClustersFeed({
           <div className="rounded-lg border border-dashed p-8 text-center">
             <p className="text-sm text-muted-foreground">
               {view === "resolved"
-                ? "No resolved clusters yet."
+                ? "No resolved issues yet."
                 : hasActiveFilters
-                  ? "No clusters match the current filters."
-                  : "No active clusters. Click \"Evaluate now\" to group your events."}
+                  ? "No issues match the current filters."
+                  : "No open issues. Click \"Evaluate now\" to group your events."}
             </p>
             {view === "resolved" && (
               <p className="text-xs text-muted-foreground mt-1">
-                Resolved clusters will appear here once you close issues.
+                Resolved issues will appear here once you close them.
               </p>
             )}
           </div>

@@ -1,5 +1,6 @@
 import { apiServer } from "@/lib/api-server";
 import ProjectDashboard, { type DashboardData } from "@/components/ProjectDashboard";
+import { PageTitle } from "@/components/PageTitle";
 
 interface Project {
   id: string;
@@ -32,11 +33,7 @@ export default async function ProjectPage({
 
   return (
     <>
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold">{project.name}</h1>
-        <p className="text-sm text-muted-foreground font-mono mt-1">{project.slug}</p>
-      </div>
-
+      <PageTitle title={project.name} />
       <ProjectDashboard slug={slug} data={dashboard ?? emptyDashboard} />
     </>
   );

@@ -1,6 +1,7 @@
 import { apiServer } from "@/lib/api-server";
 import ClustersFeed from "@/components/ClustersFeed";
 import type { ClustersPage } from "@/lib/hooks/useClusters";
+import { PageTitle } from "@/components/PageTitle";
 
 interface ScoringConfig {
   cross_channel: boolean;
@@ -23,13 +24,7 @@ export default async function ClustersPage({
 
   return (
     <>
-      <div className="mb-4">
-        <h1 className="text-2xl font-bold">Clusters</h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          Events grouped by root cause and ranked by priority score.
-        </p>
-      </div>
-
+      <PageTitle title="Issues" />
       <ClustersFeed slug={slug} initialData={initialData} initialCrossChannel={initialConfig.cross_channel} />
     </>
   );

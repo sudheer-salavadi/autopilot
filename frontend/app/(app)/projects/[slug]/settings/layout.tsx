@@ -1,4 +1,5 @@
 import { SettingsTabs } from "@/components/SettingsTabs";
+import { PageTitle } from "@/components/PageTitle";
 
 export default async function SettingsLayout({
   children,
@@ -11,7 +12,7 @@ export default async function SettingsLayout({
 
   return (
     <>
-      <h1 className="text-2xl font-bold mb-4">Settings</h1>
+      <PageTitle title="Settings" />
       <SettingsTabs slug={slug} />
       {children}
     </>

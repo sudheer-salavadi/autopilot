@@ -124,7 +124,7 @@ export default function GitHubConfig({
         <div>
           <h2 className="text-sm font-semibold">GitHub Integration</h2>
           <p className="text-xs text-muted-foreground mt-0.5">
-            File issues directly from clusters. One repo per project.
+            File GitHub issues directly from Autopilot. One repo per project.
           </p>
         </div>
         <div className="ml-auto flex items-center gap-1.5">
@@ -254,7 +254,7 @@ export default function GitHubConfig({
         <div>
           <h3 className="text-sm font-medium">Autopilot Mode</h3>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Automatically file GitHub issues when a cluster exceeds the priority
+            Automatically file GitHub issues when an issue exceeds the priority
             threshold. Regressions reopen the original issue.
           </p>
         </div>
@@ -292,7 +292,7 @@ export default function GitHubConfig({
               className="w-full accent-foreground"
             />
             <div className="flex justify-between text-[10px] text-muted-foreground">
-              <span>0 — all clusters</span>
+              <span>0 — all issues</span>
               <span>10 — critical only</span>
             </div>
           </div>

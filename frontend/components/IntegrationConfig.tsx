@@ -113,65 +113,69 @@ export default function IntegrationConfig({
           />
         </div>
 
-        <Separator />
+        {!isSimulating && (
+          <>
+            <Separator />
 
-        {/* Webhook URL */}
-        <div className="space-y-1.5">
-          <Label className="text-xs">Endpoint URL</Label>
-          <div className="flex gap-1.5">
-            <Input
-              readOnly
-              value={webhookUrl}
-              className="font-mono text-[11px] h-7"
-            />
-            <Button type="button" variant="outline" size="icon-sm" onClick={copy}>
-              {copied ? (
-                <IconCheck className="size-3.5 text-emerald-600" />
-              ) : (
-                <IconCopy className="size-3.5" />
-              )}
-            </Button>
-          </div>
-        </div>
+            {/* Webhook URL */}
+            <div className="space-y-1.5">
+              <Label className="text-xs">Endpoint URL</Label>
+              <div className="flex gap-1.5">
+                <Input
+                  readOnly
+                  value={webhookUrl}
+                  className="font-mono text-[11px] h-7"
+                />
+                <Button type="button" variant="outline" size="icon-sm" onClick={copy}>
+                  {copied ? (
+                    <IconCheck className="size-3.5 text-emerald-600" />
+                  ) : (
+                    <IconCopy className="size-3.5" />
+                  )}
+                </Button>
+              </div>
+            </div>
 
-        <Separator />
+            <Separator />
 
-        {/* Secret form */}
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor={`secret-${type}`} className="text-xs">
-              {integration ? "Rotate Secret" : "Webhook Secret"}
-            </Label>
-            <Input
-              id={`secret-${type}`}
-              type="password"
-              required
-              value={secret}
-              onChange={(e) => setSecret(e.target.value)}
-              placeholder={
-                type === "stripe"
-                  ? "whsec_…"
-                  : type === "fullstory"
-                  ? "shared-secret"
-                  : "your-secret"
-              }
-              className="font-mono text-xs h-7"
-            />
-            <p className="text-[11px] text-muted-foreground">
-              Encrypted at rest. Never exposed after saving.
-            </p>
-          </div>
+            {/* Secret form */}
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div className="space-y-1.5">
+                <Label htmlFor={`secret-${type}`} className="text-xs">
+                  {integration ? "Rotate Secret" : "Webhook Secret"}
+                </Label>
+                <Input
+                  id={`secret-${type}`}
+                  type="password"
+                  required
+                  value={secret}
+                  onChange={(e) => setSecret(e.target.value)}
+                  placeholder={
+                    type === "stripe"
+                      ? "whsec_…"
+                      : type === "fullstory"
+                      ? "shared-secret"
+                      : "your-secret"
+                  }
+                  className="font-mono text-xs h-7"
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  Encrypted at rest. Never exposed after saving.
+                </p>
+              </div>
 
-          {error && <p className="text-xs text-destructive">{error}</p>}
+              {error && <p className="text-xs text-destructive">{error}</p>}
 
-          <Button type="submit" size="sm" disabled={submitting} className="w-full">
-            {submitting
-              ? "Saving…"
-              : integration
-              ? "Rotate Secret"
-              : "Enable Integration"}
-          </Button>
-        </form>
+              <Button type="submit" size="sm" disabled={submitting} className="w-full">
+                {submitting
+                  ? "Saving…"
+                  : integration
+                  ? "Rotate Secret"
+                  : "Enable Integration"}
+              </Button>
+            </form>
+          </>
+        )}
       </div>
     </div>
   );

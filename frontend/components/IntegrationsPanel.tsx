@@ -1,12 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import Image from "next/image";
 import {
   IconBrandGithub,
-  IconBrandStripe,
-  IconBug,
   IconCircleFilled,
-  IconPointer,
 } from "@tabler/icons-react";
 import { cn } from "@/lib/utils";
 import { apiClient } from "@/lib/api";
@@ -52,17 +50,17 @@ const CATALOG: { group: string; items: CatalogEntry[] }[] = [
       {
         type: "stripe",
         label: "Stripe",
-        icon: <IconBrandStripe className="size-5" />,
+        icon: <Image src="/integrations-icns/stripe.svg" alt="Stripe" width={20} height={20} />,
       },
       {
         type: "sentry",
         label: "Sentry",
-        icon: <IconBug className="size-5" />,
+        icon: <Image src="/integrations-icns/sentry.svg" alt="Sentry" width={20} height={20} />,
       },
       {
         type: "fullstory",
         label: "FullStory",
-        icon: <IconPointer className="size-5" />,
+        icon: <Image src="/integrations-icns/fullstory.svg" alt="FullStory" width={20} height={20} />,
       },
     ],
   },
@@ -153,7 +151,7 @@ export default function IntegrationsPanel({
   };
 
   return (
-    <div className="flex h-[calc(100vh-10rem)]">
+    <div className="flex h-[calc(100vh-3rem)]">
       {/* Col 1 — catalog */}
       <div className="w-52 shrink-0 border-r flex flex-col overflow-y-auto">
         {CATALOG.map((group) => (

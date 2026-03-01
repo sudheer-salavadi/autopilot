@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { IconRefresh } from "@tabler/icons-react";
 import { Button } from "@/components/ui/button";
 import { useEvents } from "@/lib/hooks/useEvents";
+import { JsonBlock } from "@/components/JsonBlock";
 
 const REFETCH_INTERVAL_MS = 5_000;
 
@@ -76,9 +77,7 @@ export default function IntegrationPreview({
               <summary className="cursor-pointer text-muted-foreground hover:text-foreground select-none">
                 Payload
               </summary>
-              <pre className="mt-2 overflow-auto rounded-md bg-muted p-3 text-xs max-h-48 leading-relaxed">
-                {JSON.stringify(event.payload, null, 2)}
-              </pre>
+              <JsonBlock value={event.payload} maxHeight="12rem" className="mt-2" />
             </details>
           </div>
         ))}
