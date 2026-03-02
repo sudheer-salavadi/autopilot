@@ -1104,6 +1104,7 @@ export default function ClustersFeed({
   const { data, loading, error, refetch } = useClusters(slug, initialData, params);
 
   const [evaluating, setEvaluating]         = useState(false);
+  const [reclustering, setReclustering]     = useState(false);
   const [selected, setSelected]             = useState<Set<string>>(new Set());
   const [activeCluster, setActiveCluster]   = useState<Cluster | null>(null);
   const [showHelp, setShowHelp]             = useState(false);
@@ -1211,6 +1212,17 @@ export default function ClustersFeed({
     }
   }
 
+  async function handleRecluster() {
+    if (!window.confirm("This will delete all current issues and re-group your events from scratch. Continue?")) return;
+    setReclustering(true);
+    try {
+      await api.post(`/api/projects/${slug}/clusters/evaluate?reset=true`);
+      await refetch();
+    } catch { /* silently ignore */ } finally {
+      setReclustering(false);
+    }
+  }
+
 
   return (
     <div className={`flex -mt-6 items-start${isDragging ? " select-none" : ""}`}>
@@ -1264,10 +1276,16 @@ export default function ClustersFeed({
           </p>
 
           {view === "active" && (
-            <Button size="sm" variant="outline" onClick={handleEvaluate} disabled={evaluating} className="gap-2 shrink-0">
-              <IconRefresh className={`size-4 ${evaluating ? "animate-spin" : ""}`} />
-              Evaluate now
-            </Button>
+            <>
+              <Button size="sm" variant="outline" onClick={handleEvaluate} disabled={evaluating || reclustering} className="gap-2 shrink-0">
+                <IconRefresh className={`size-4 ${evaluating ? "animate-spin" : ""}`} />
+                Evaluate now
+              </Button>
+              <Button size="sm" variant="outline" onClick={handleRecluster} disabled={evaluating || reclustering} className="gap-2 shrink-0 text-muted-foreground hover:text-foreground">
+                <IconRefresh className={`size-4 ${reclustering ? "animate-spin" : ""}`} />
+                Re-cluster all
+              </Button>
+            </>
           )}
 
           <button

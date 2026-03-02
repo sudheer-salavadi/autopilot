@@ -174,9 +174,21 @@ async def update_cluster_status(
 
 @router.post("/clusters/evaluate")
 async def trigger_evaluate(
+    reset: bool = False,
     deps=Depends(require_project_owner),
     db: AsyncSession = Depends(get_db),
 ):
     project, _, _ = deps
+
+    if reset:
+        # Delete all clusters for this project — cluster_events cascade automatically.
+        # This frees every event to be re-clustered from scratch.
+        clusters_result = await db.execute(
+            select(Cluster).where(Cluster.project_id == project.id)
+        )
+        for cluster in clusters_result.scalars().all():
+            await db.delete(cluster)
+        await db.commit()
+
     stats = await evaluate_project(project.id, db)
     return stats
