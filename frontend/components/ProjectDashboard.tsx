@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { formatTitle } from "@/lib/format-tokens";
 import {
   IconAlertTriangle,
   IconBrandGithub,
@@ -252,7 +253,7 @@ export default function ProjectDashboard({
                         <div className="flex items-center gap-2 min-w-0">
                           <PriorityIcon score={c.priority_score} />
                           <div className="min-w-0">
-                            <p className="font-medium truncate">{c.title}</p>
+                            <p className="font-medium truncate">{formatTitle(c.title)}</p>
                             <p className="text-xs text-muted-foreground truncate mt-0.5">{c.root_cause}</p>
                           </div>
                           {c.github_issue_number && (

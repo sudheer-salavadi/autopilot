@@ -63,7 +63,7 @@ export default function PrioritizationConfig({
   }
 
   return (
-    <div className="space-y-4 max-w-md">
+    <div className="space-y-4 max-w-lg grid grid-cols-2 gap-6">
 
       {/* Card 1 — Severity Weights */}
       <div className="rounded-lg border bg-card p-5 space-y-4">
@@ -158,7 +158,9 @@ export default function PrioritizationConfig({
 
       {error && <p className="text-sm text-destructive">{error}</p>}
 
-      <Button onClick={handleSave} disabled={!isValid || saving}>
+      <div className="my-4 h-2 border-b w-full flex" />
+
+      <Button onClick={handleSave} disabled={!isValid || saving} className="w-fit">
         {saving ? "Saving…" : saved ? "Saved!" : "Save"}
       </Button>
     </div>
