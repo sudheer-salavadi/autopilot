@@ -1440,7 +1440,7 @@ export default function ClustersFeed({
                     key={cluster.id}
                     onClick={() => setActiveCluster(cluster)}
                     className={`cursor-pointer transition-colors ${
-                      activeCluster?.id === cluster.id ? "bg-foreground/[.67]" : "hover:bg-muted/60"
+                      activeCluster?.id === cluster.id ? "bg-foreground/[.05]" : "hover:bg-muted/60"
                     }`}
                   >
                     {view === "active" && (
