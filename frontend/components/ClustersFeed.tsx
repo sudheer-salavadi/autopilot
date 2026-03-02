@@ -638,34 +638,41 @@ function ClusterDetail({
                 <IconExternalLink className="size-3" />
               </a>
             ) : (
-              <button
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={handleCreateIssue}
                 disabled={filingIssue}
-                className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+                className="h-7 px-2 text-xs gap-1.5 text-muted-foreground"
               >
                 <IconBrandGithub className="size-3.5" />
                 {filingIssue ? "Filing…" : "Create GitHub issue"}
-              </button>
+              </Button>
             )}
 
             {cluster.status !== "resolved" && (
-              <button
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={handleResolve}
                 disabled={resolving}
-                className="inline-flex items-center gap-1 text-[11px] text-muted-foreground transition-colors disabled:opacity-50"
+                className="h-7 px-2 text-xs gap-1 text-muted-foreground"
               >
-                {resolving ? "Resolving…" : "✓ Mark as resolved"}
-              </button>
+                <IconCheck className="size-3" />
+                {resolving ? "Resolving…" : "Mark as resolved"}
+              </Button>
             )}
 
             {cluster.status === "resolved" && (
-              <button
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={handleUnresolve}
                 disabled={resolving}
-                className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+                className="h-7 px-2 text-xs gap-1 text-muted-foreground"
               >
                 {resolving ? "Updating…" : "↩ Mark as unresolved"}
-              </button>
+              </Button>
             )}
           </div>
           {issueError && (
@@ -708,20 +715,20 @@ function ClusterDetail({
           <div className="p-4 space-y-5 text-sm">            
 
             <div>
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1"> <IconZoomQuestion className="inline mr-1 size-3" /> What&apos;s happening</p>
+              <p className="text-[11px] font-semibold uppercase tracking-wider mb-1"> <IconZoomQuestion className="inline mr-1 size-3" /> What&apos;s happening</p>
               <p className="leading-relaxed">{formatRootCause(cluster.root_cause)}</p>
             </div>
 
           {/* PM Insight — the "what to do" synthesis */}
             {cluster.pm_insight && (
             <div>
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1"><IconSparkles className="inline mr-1 size-3" />Recommended Solution</p>
+              <p className="text-[11px] font-semibold uppercase tracking-wider  mb-1"><IconSparkles className="inline mr-1 size-3" />Recommended Solution</p>
               <p className="leading-relaxed">{formatRootCause(cluster.pm_insight)}</p>
             </div>
             )}      
 
             <div>
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Impact</p>
+              <p className="text-[11px] font-semibold uppercase tracking-wider  mb-2">Impact</p>
               <div className="grid grid-cols-2 gap-2">
                 <div className="rounded-md border p-3 space-y-0.5">
                   <p className="text-xs text-muted-foreground">Revenue risk</p>
@@ -757,7 +764,7 @@ function ClusterDetail({
             </div>
 
             <div>
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+              <p className="text-[11px] font-semibold uppercase tracking-wider  mb-2">
                 Signals
               </p>
               {payloadsLoading && (
@@ -924,7 +931,7 @@ function ClusterDetail({
             </div>
 
             <div>
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">Timeline</p>
+              <p className="text-[11px] font-semibold uppercase tracking-wider  mb-1">Timeline</p>
               <p className="text-xs text-muted-foreground">
                 Issue first seen {timeAgo(cluster.first_seen)} · most recent event {timeAgo(cluster.last_seen)}
               </p>
@@ -945,7 +952,7 @@ function ClusterDetail({
         {tab === "raw" && (
           <div className="p-4 space-y-5">
             <div>
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+              <p className="text-[11px] font-semibold uppercase tracking-wider mb-2">
                 Recent 20 events
               </p>
               {payloadsLoading && (
@@ -968,7 +975,7 @@ function ClusterDetail({
             </div>
 
             <div>
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Score breakdown</p>
+              <p className="text-[11px] font-semibold uppercase tracking-wider  mb-2">Score breakdown</p>
               <div className="rounded-md border divide-y font-mono text-xs">
                 {[
                   { label: "Revenue score",   value: cluster.revenue_score },
