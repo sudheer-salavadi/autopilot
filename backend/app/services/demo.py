@@ -1,17 +1,20 @@
 import asyncio
 import json
+import logging
 import re
 import random
 import uuid
 from datetime import datetime, timezone
 from typing import Tuple
 
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, RateLimitError
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db.session import AsyncSessionLocal
+
+logger = logging.getLogger(__name__)
 
 
 def _ai_client() -> Tuple[AsyncOpenAI, str, bool]:
@@ -26,7 +29,7 @@ def _ai_client() -> Tuple[AsyncOpenAI, str, bool]:
             settings.LM_STUDIO_MODEL or "local-model",
             True,
         )
-    return AsyncOpenAI(api_key=settings.OPENAI_API_KEY), "gpt-4o-mini", False
+    return AsyncOpenAI(api_key=settings.OPENAI_API_KEY), "gpt-5-nano-2025-08-07", False
 
 
 def _parse_json(text: str) -> dict:
@@ -54,13 +57,22 @@ async def ai_chat(messages: list[dict], temperature: float = 0.3) -> str:
             **kwargs,
         )
         return response.choices[0].message.content
-    except Exception:
+    except RateLimitError as e:
+        logger.warning("AI rate limit / quota exceeded for model %s: %s", model, e)
         if not settings.GEMINI_API_KEY:
             raise
-        gemini = AsyncOpenAI(
-            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-            api_key=settings.GEMINI_API_KEY,
-        )
+        logger.info("Falling back to Gemini (%s)", settings.GEMINI_MODEL)
+    except Exception as e:
+        logger.warning("AI call failed for model %s: %s", model, e)
+        if not settings.GEMINI_API_KEY:
+            raise
+        logger.info("Falling back to Gemini (%s)", settings.GEMINI_MODEL)
+
+    gemini = AsyncOpenAI(
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        api_key=settings.GEMINI_API_KEY,
+    )
+    try:
         response = await gemini.chat.completions.create(
             model=settings.GEMINI_MODEL,
             messages=messages,
@@ -68,6 +80,12 @@ async def ai_chat(messages: list[dict], temperature: float = 0.3) -> str:
             response_format={"type": "json_object"},
         )
         return response.choices[0].message.content
+    except RateLimitError as e:
+        logger.error("Gemini rate limit / quota exceeded: %s", e)
+        raise
+    except Exception as e:
+        logger.error("Gemini fallback also failed: %s", e)
+        raise
 
 STRIPE_SCENARIOS = [
     "A customer's payment fails due to insufficient funds. Retries also fail.",

@@ -50,10 +50,10 @@ export interface ClustersParams {
 
 function buildQs(params: ClustersParams): string {
   const q = new URLSearchParams();
+  q.set("page_size", "100");
   if (params.view && params.view !== "active") q.set("view", params.view);
   if (params.source) q.set("source", params.source);
-  const s = q.toString();
-  return s ? `?${s}` : "";
+  return `?${q.toString()}`;
 }
 
 export function useClusters(

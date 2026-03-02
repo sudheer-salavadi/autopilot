@@ -23,7 +23,7 @@ router = APIRouter(prefix="/api/projects/{slug}", tags=["clusters"])
 @router.get("/clusters", response_model=ClustersPage)
 async def list_clusters(
     page: int = 1,
-    page_size: int = 20,
+    page_size: int = 100,
     # "active" (default) = open + investigating; "resolved" = resolved only
     view: str = Query(default="active", pattern="^(active|resolved)$"),
     # Optional filters
