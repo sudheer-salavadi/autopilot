@@ -50,17 +50,10 @@ function formatRootCause(text: string): React.ReactNode {
     }
 
     const token = match[0];
-    const isPath = token.startsWith("/") || token.startsWith("http");
     const isCurrency = token.startsWith("$");
     const display = token.startsWith("`") ? token.slice(1, -1) : token;
 
-    if (isPath) {
-      parts.push(
-        <span key={key++} className="font-mono  bg-muted/80 text-foreground/80 px-1 py-0.5 rounded">
-          {display}
-        </span>
-      );
-    } else if (isCurrency) {
+    if (isCurrency) {
       parts.push(
         <span key={key++} className="font-mono  font-semibold px-1 py-0.5 rounded bg-amber-100 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300">
           {display}
