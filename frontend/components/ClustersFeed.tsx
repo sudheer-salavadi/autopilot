@@ -68,7 +68,7 @@ function formatRootCause(text: string): React.ReactNode {
       );
     } else {
       parts.push(
-        <code key={key++} className="font-mono bg-muted px-1 py-0.5 rounded text-foreground/90">
+        <code key={key++} className="font-mono bg-blue-100 dark:bg-blue-950/40 px-1 py-0.5 text-blue-950 dark:text-blue-200 rounded">
           {display}
         </code>
       );
