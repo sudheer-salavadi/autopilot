@@ -56,7 +56,7 @@ export function AskAIButton() {
       <div className={`ml-auto p-px rounded-md ${GRADIENT}`}>
         <button
           onClick={() => setOpen((v) => !v)}
-          className="flex items-center gap-1.5 rounded-[5px] bg-background px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+          className="flex items-center gap-1.5 rounded-[5px] bg-background px-2.5 py-1 text-xs font-medium transition-colors hover:text-foreground"
           aria-label="Ask AI"
         >
           <IconSparkles className="size-3.5" />

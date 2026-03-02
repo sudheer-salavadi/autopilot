@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import {
   IconCheck,
@@ -10,9 +11,11 @@ import {
   IconLayersIntersect,
   IconLayoutDashboard,
   IconLogout,
+  IconMoon,
   IconPlus,
   IconPuzzle,
   IconSettings,
+  IconSun,
 } from "@tabler/icons-react";
 
 import {
@@ -63,6 +66,18 @@ export default function AppSidebar({
   projects: Project[];
 }) {
   const pathname = usePathname();
+  const [isDark, setIsDark] = useState(false);
+
+  useEffect(() => {
+    setIsDark(document.documentElement.classList.contains("dark"));
+  }, []);
+
+  function toggleTheme() {
+    const next = !isDark;
+    setIsDark(next);
+    document.documentElement.classList.toggle("dark", next);
+    try { localStorage.setItem("theme", next ? "dark" : "light"); } catch { /* ignore */ }
+  }
 
   const projectMatch = pathname.match(/^\/projects\/([^/]+)/);
   const currentSlug =
@@ -261,6 +276,13 @@ export default function AppSidebar({
                       {user.id}
                     </p> */}
                   </div>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={toggleTheme} className="flex items-center gap-2 cursor-pointer">
+                    {isDark
+                      ? <IconSun className="size-4" />
+                      : <IconMoon className="size-4" />}
+                    {isDark ? "Light mode" : "Dark mode"}
+                  </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem asChild>
                     <a href={`${API_URL}/api/auth/logout`} className="flex items-center gap-2">
