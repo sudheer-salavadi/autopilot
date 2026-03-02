@@ -298,9 +298,9 @@ export default function ProjectDashboard({
                           </span>
                           <span className="tabular-nums font-medium">{s.count.toLocaleString()}</span>
                         </div>
-                        <div className="h-1.5 rounded-full bg-foreground/80 overflow-hidden">
+                        <div className="h-1.5 rounded-full bg-foreground/20 overflow-hidden">
                           <div
-                            className="h-full rounded-full bg-foreground/30"
+                            className="h-full rounded-full bg-foreground/80"
                             style={{ width: `${pct}%` }}
                           />
                         </div>
