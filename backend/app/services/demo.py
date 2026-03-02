@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Tuple
 
-from openai import AsyncOpenAI, RateLimitError
+from openai import AsyncOpenAI, BadRequestError, RateLimitError
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -59,6 +59,22 @@ async def ai_chat(messages: list[dict], temperature: float = 0.3) -> str:
         )
         logger.info("AI call ✓ model=%s", model)
         return response.choices[0].message.content
+    except BadRequestError as e:
+        # Some models (e.g. gpt-5-nano, o-series) only support default temperature.
+        # Retry once without the temperature parameter.
+        if "temperature" in str(e) and "unsupported_value" in str(e):
+            logger.info("Model %s does not support temperature=%.1f, retrying with default", model, temperature)
+            response = await client.chat.completions.create(
+                model=model,
+                messages=messages,
+                **kwargs,
+            )
+            logger.info("AI call ✓ model=%s (default temperature)", model)
+            return response.choices[0].message.content
+        logger.warning("AI call failed for model %s: %s", model, e)
+        if not settings.GEMINI_API_KEY:
+            raise
+        logger.info("Falling back to Gemini (%s)", settings.GEMINI_MODEL)
     except RateLimitError as e:
         logger.warning("AI rate limit / quota exceeded for model %s: %s", model, e)
         if not settings.GEMINI_API_KEY:
