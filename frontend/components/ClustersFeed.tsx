@@ -1525,21 +1525,21 @@ export default function ClustersFeed({
       <Sheet open={showHelp} onOpenChange={setShowHelp}>
         <SheetContent side="right" className="w-full sm:max-w-2xl p-6 overflow-y-auto">
           <SheetTitle className="flex items-center gap-2 mb-6">
-            <IconHelpCircle className="size-4 text-muted-foreground" />
+            <IconHelpCircle className="size-4 " />
             How Issues work
           </SheetTitle>
           <div className="space-y-7 text-sm pr-1">
 
             {/* pipeline */}
             <div className="space-y-2">
-              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">The pipeline</p>
-              <p className="text-muted-foreground leading-relaxed">
+              <p className="text-xs font-semibold uppercase tracking-wider">The pipeline</p>
+              <p className="leading-relaxed text-neutral-800 dark:text-neutral-200">
                 Raw events from Stripe, Sentry, FullStory, and Zendesk flow in via webhooks or simulation.
                 Autopilot groups them into <span className="text-foreground font-medium">issues</span> — clusters
                 of events that share the same underlying root cause — and scores each one so the
                 highest-impact problems surface first.
               </p>
-              <div className="rounded-md border bg-muted/30 p-3 font-mono text-xs leading-6 text-muted-foreground">
+              <div className="rounded-md border bg-muted/30 p-3 font-mono text-xs leading-6 text-neutral-800 dark:text-neutral-200">
                 <p>Stripe event  ──┐</p>
                 <p>Sentry event  ──┼──▶  LLM grouping  ──▶  Issue  ──▶  Score</p>
                 <p>FullStory     ──┘         (every 2 min)         Revenue × w1</p>
@@ -1550,12 +1550,12 @@ export default function ClustersFeed({
 
             {/* scoring */}
             <div className="space-y-2">
-              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Severity score</p>
-              <p className="text-muted-foreground leading-relaxed">
+              <p className="text-xs font-semibold uppercase tracking-wider">Severity score</p>
+              <p className="text-neutral-800 dark:text-neutral-200 leading-relaxed">
                 Each issue gets a score from 0–1 based on three signals, each normalised against
                 your configured thresholds (Settings → Prioritization):
               </p>
-              <div className="rounded-md border bg-muted/30 p-3 font-mono text-xs leading-6 text-muted-foreground space-y-1">
+              <div className="rounded-md border bg-muted/30 p-3 font-mono text-xs leading-6 text-neutral-800 dark:text-neutral-200 space-y-1">
                 <p>Revenue    = sum of $ at risk  ÷  max_revenue_usd</p>
                 <p>Frequency  = event count       ÷  max_frequency_count</p>
                 <p>UX Impact  = avg frustration signal per event</p>
@@ -1571,7 +1571,7 @@ export default function ClustersFeed({
                 ].map(({ badge, label, range }) => (
                   <div key={label} className="flex items-center justify-between px-3 py-2">
                     <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${badge}`}>{label}</span>
-                    <span className="font-mono text-muted-foreground">{range}</span>
+                    <span className="font-mono text-neutral-800 dark:text-neutral-200">{range}</span>
                   </div>
                 ))}
               </div>
@@ -1579,13 +1579,13 @@ export default function ClustersFeed({
 
             {/* correlating attributes */}
             <div className="space-y-2">
-              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Correlating attributes</p>
-              <p className="text-muted-foreground leading-relaxed">
+              <p className="text-xs font-semibold uppercase tracking-wider">Correlating attributes</p>
+              <p className="text-neutral-800 dark:text-neutral-200 leading-relaxed">
                 When you open an issue, Autopilot scans every event in the cluster and extracts
                 identifiers — emails, user IDs, page URLs, error types, and frustration signals.
                 It then answers two questions:
               </p>
-              <div className="rounded-md border bg-muted/30 p-3 font-mono text-xs leading-6 text-muted-foreground space-y-2">
+              <div className="rounded-md border bg-muted/30 p-3 font-mono text-xs leading-6 text-neutral-800 dark:text-neutral-200 space-y-2">
                 <p><span className="text-foreground">Who is affected across all your tools?</span></p>
                 <p>  user@co.com seen in Sentry error + FullStory rage-click</p>
                 <p>  → same person, broken experience end-to-end</p>
@@ -1594,7 +1594,7 @@ export default function ClustersFeed({
                 <p>  FullStory: /checkout ×6, rage_click ×6</p>
                 <p>  Zendesk: urgent ×2, tag:billing ×3</p>
               </div>
-              <div className="space-y-2.5 text-xs text-muted-foreground">
+              <div className="space-y-2.5 text-xs text-neutral-800 dark:text-neutral-200">
                 <div className="flex gap-2.5">
                   <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0 mt-1" />
                   <p><span className="text-foreground font-medium">Affected users</span> — email addresses and app user IDs (e.g. <code className="font-mono bg-muted px-1 rounded">user_789</code>) seen in 2+ tools for this issue. These are your highest-priority people to contact or investigate.</p>
