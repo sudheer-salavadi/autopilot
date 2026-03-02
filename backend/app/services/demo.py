@@ -49,6 +49,7 @@ async def ai_chat(messages: list[dict], temperature: float = 0.3) -> str:
     """
     client, model, is_local = _ai_client()
     kwargs = {} if is_local else {"response_format": {"type": "json_object"}}
+    logger.info("AI call → model=%s", model)
     try:
         response = await client.chat.completions.create(
             model=model,
@@ -56,6 +57,7 @@ async def ai_chat(messages: list[dict], temperature: float = 0.3) -> str:
             temperature=temperature,
             **kwargs,
         )
+        logger.info("AI call ✓ model=%s", model)
         return response.choices[0].message.content
     except RateLimitError as e:
         logger.warning("AI rate limit / quota exceeded for model %s: %s", model, e)
@@ -72,6 +74,7 @@ async def ai_chat(messages: list[dict], temperature: float = 0.3) -> str:
         base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
         api_key=settings.GEMINI_API_KEY,
     )
+    logger.info("AI call → model=%s (Gemini fallback)", settings.GEMINI_MODEL)
     try:
         response = await gemini.chat.completions.create(
             model=settings.GEMINI_MODEL,
@@ -79,6 +82,7 @@ async def ai_chat(messages: list[dict], temperature: float = 0.3) -> str:
             temperature=temperature,
             response_format={"type": "json_object"},
         )
+        logger.info("AI call ✓ model=%s (Gemini fallback)", settings.GEMINI_MODEL)
         return response.choices[0].message.content
     except RateLimitError as e:
         logger.error("Gemini rate limit / quota exceeded: %s", e)

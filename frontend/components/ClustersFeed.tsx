@@ -1252,7 +1252,7 @@ export default function ClustersFeed({
   async function handleCancelEvaluation() {
     if (!window.confirm("Stop the current evaluation?")) return;
     try {
-      await api.delete(`/api/projects/${slug}/clusters/evaluate`);
+      await api.del(`/api/projects/${slug}/clusters/evaluate`);
     } catch { /* silently ignore */ }
     setEvaluating(false);
     setReclustering(false);
