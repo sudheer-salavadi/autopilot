@@ -178,22 +178,30 @@ export default function AppSidebar({
                   <SheetTitle>How Autopilot works</SheetTitle>
                 </SheetHeader>
                 <div className="px-4 pb-8 space-y-8">
-                  <p className="text-sm text-muted-foreground leading-relaxed">
-                    Connect Stripe, Sentry, FullStory, and Zendesk. Autopilot reads the raw
-                    events from all four, groups them by root cause, scores them by business
-                    impact, and tells you what to fix first.
-                  </p>
+
+                  {/* The problem */}
+                  <div className="space-y-2">
+                    <p className="text-sm font-semibold">The problem</p>
+                    <p className="text-sm text-muted-foreground leading-relaxed">
+                      Product and engineering teams operate across four tools — Stripe for revenue,
+                      Sentry for errors, FullStory for UX friction, Zendesk for support. Each fires
+                      separate alerts. There is no shared view, no root cause, and no ranking.
+                      The result: teams spend hours triaging noise and miss the issues that are
+                      actually costing them money or users.
+                    </p>
+                  </div>
 
                   <hr />
 
+                  {/* How it works */}
                   <div className="space-y-5">
-                    <h2 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">What it does</h2>
+                    <h2 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">How it works</h2>
                     {[
-                      { title: "Ingests events from your existing tools", body: "Connect Stripe, Sentry, FullStory, and Zendesk via webhook or the simulate toggle for instant demo data. No new SDK to install." },
-                      { title: "Groups events by root cause, not by source", body: "A Stripe payment failure, a Sentry exception, and a FullStory rage-click from the same checkout flow become one issue — not three separate alerts." },
-                      { title: "Scores every issue by business impact", body: "Each issue gets a priority score based on revenue at risk, how often it occurs, and UX friction signals. The highest-impact problem is always at the top. You control the weights in Settings → Prioritization." },
-                      { title: "Explains root cause and recommends a fix", body: "Open any issue to see what's happening, which users are affected across all your tools, what the likely cause is, and what to do about it." },
-                      { title: "Files GitHub issues with one click", body: "Connect your GitHub repo in Settings. Every issue can be sent directly to your tracker — pre-written, with full context attached." },
+                      { title: "Connect your existing tools", body: "Plug in Stripe, Sentry, FullStory, and Zendesk via webhook or flip the Simulate toggle for instant demo data. No new SDK to install." },
+                      { title: "Events are grouped by root cause", body: "A Stripe payment failure, a Sentry exception, and a FullStory rage-click from the same checkout flow become one issue — not three separate alerts." },
+                      { title: "Every issue is scored by business impact", body: "Each issue gets a priority score based on revenue at risk, how often it occurs, and UX friction signals. The highest-impact problem surfaces at the top." },
+                      { title: "Root cause and recommended fix included", body: "Open any issue to see what broke, which users are affected across all your tools, what the likely cause is, and what to do about it." },
+                      { title: "File to GitHub with one click", body: "Connect your GitHub repo in Settings. Any issue can be sent directly to your tracker — pre-written, with full context attached." },
                     ].map(({ title, body }) => (
                       <div key={title} className="space-y-1">
                         <p className="text-sm font-semibold">{title}</p>
@@ -204,26 +212,22 @@ export default function AppSidebar({
 
                   <hr />
 
-                  <div className="space-y-4">
-                    <h2 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">How to get started</h2>
-                    <ol className="space-y-4">
-                      {[
-                        { n: "1", text: "Create a project." },
-                        { n: "2", text: "Go to Integrations. Connect a source or turn on Simulate to generate realistic demo events immediately." },
-                        { n: "3", text: "Go to Issues. Autopilot groups and scores incoming events automatically. Critical issues appear at the top." },
-                        { n: "4", text: "Open an issue to see the root cause, affected users, revenue impact, and recommended fix." },
-                        { n: "5", text: "Optionally: go to Settings → Prioritization to adjust how revenue, frequency, and UX signals are weighted." },
-                        { n: "6", text: "Optionally: go to Settings → GitHub to connect a repo and file issues directly from Autopilot." },
-                      ].map(({ n, text }) => (
-                        <li key={n} className="flex gap-3 text-sm">
-                          <span className="shrink-0 size-5 rounded-full border flex items-center justify-center text-xs font-medium tabular-nums">
-                            {n}
-                          </span>
-                          <span className="text-muted-foreground leading-relaxed pt-0.5">{text}</span>
-                        </li>
-                      ))}
-                    </ol>
+                  {/* CTAs */}
+                  <div className="flex gap-3">
+                    <a
+                      href={`${API_URL}/api/auth/login`}
+                      className="inline-flex items-center justify-center rounded-md bg-foreground px-4 py-2 text-sm font-medium text-background transition-colors hover:bg-foreground/90"
+                    >
+                      Get started
+                    </a>
+                    <Link
+                      href="/dashboard"
+                      className="inline-flex items-center justify-center rounded-md border px-4 py-2 text-sm font-medium transition-colors hover:bg-muted"
+                    >
+                      Go to dashboard
+                    </Link>
                   </div>
+
                 </div>
               </SheetContent>
             </Sheet>
