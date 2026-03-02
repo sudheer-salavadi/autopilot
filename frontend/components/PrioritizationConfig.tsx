@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import posthog from "posthog-js";
 import { apiClient } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -55,8 +56,17 @@ export default function PrioritizationConfig({
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
+      posthog.capture("prioritization_config_saved", {
+        project_slug: slug,
+        weight_revenue: revenue,
+        weight_frequency: frequency,
+        weight_ux: ux,
+        max_revenue_usd: maxRevenue,
+        max_frequency_count: maxFreq,
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save");
+      posthog.captureException(e);
     } finally {
       setSaving(false);
     }

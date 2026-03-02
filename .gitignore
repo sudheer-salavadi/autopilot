@@ -36,3 +36,4 @@ out/
 *.pem
 deployment-log.txt
 backend/app/services/Untitled-1.md
+/frontend/.claude

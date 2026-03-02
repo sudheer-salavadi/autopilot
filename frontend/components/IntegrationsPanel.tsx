@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import posthog from "posthog-js";
 import Image from "next/image";
 import {
   IconBrandGithub,
@@ -159,6 +160,11 @@ export default function IntegrationsPanel({
       if (active) next.add(type);
       else next.delete(type);
       return next;
+    });
+    posthog.capture("integration_simulate_toggled", {
+      integration_type: type,
+      simulate_active: active,
+      project_slug: project.slug,
     });
     // Persist to server so simulation continues even after navigation
     api

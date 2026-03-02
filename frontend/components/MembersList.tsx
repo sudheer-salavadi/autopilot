@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import posthog from "posthog-js";
 import { IconTrash, IconUserPlus } from "@tabler/icons-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -51,8 +52,13 @@ export default function MembersList({ slug }: { slug: string }) {
       });
       setMembers((prev) => [...prev, member]);
       setEmail("");
+      posthog.capture("team_member_invited", {
+        project_slug: slug,
+        invited_email: email,
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to invite");
+      posthog.captureException(err);
     } finally {
       setInviting(false);
     }
@@ -63,8 +69,13 @@ export default function MembersList({ slug }: { slug: string }) {
     try {
       await api.del(`/api/projects/${slug}/members/${userId}`);
       setMembers((prev) => prev.filter((m) => m.user_id !== userId));
+      posthog.capture("team_member_removed", {
+        project_slug: slug,
+        removed_user_id: userId,
+      });
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to remove");
+      posthog.captureException(err);
     }
   };
 
