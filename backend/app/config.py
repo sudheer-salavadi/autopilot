@@ -35,5 +35,8 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRE_SECONDS: int = 60 * 60 * 24 * 7  # 7 days
 
+    # Set True in production (HTTPS). Controls the Secure flag on ap_session cookie.
+    HTTPS_COOKIES: bool = False
+
 
 settings = Settings()

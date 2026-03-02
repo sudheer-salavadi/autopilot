@@ -35,7 +35,7 @@ async def callback(code: str, response: Response, db=Depends(get_db)):
         value=token,
         httponly=True,
         samesite="lax",
-        secure=False,  # set True in production (HTTPS)
+        secure=settings.HTTPS_COOKIES,
         max_age=settings.JWT_EXPIRE_SECONDS,
     )
     return redirect

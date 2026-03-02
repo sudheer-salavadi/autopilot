@@ -1437,7 +1437,7 @@ export default function ClustersFeed({
 
       {/* ── How it works sheet ──────────────────────────────────────── */}
       <Sheet open={showHelp} onOpenChange={setShowHelp}>
-        <SheetContent side="right" className="w-full sm:max-w-lg overflow-y-auto">
+        <SheetContent side="right" className="w-full sm:max-w-xl p-6 overflow-y-auto">
           <SheetTitle className="flex items-center gap-2 mb-6">
             <IconHelpCircle className="size-4 text-muted-foreground" />
             How Issues work

@@ -10,7 +10,6 @@ import {
   IconChevronUp,
   IconChevronsDown,
   IconChevronsUp,
-  IconCircleCheck,
   IconCurrencyDollar,
   IconMinus,
   IconUsers,
@@ -169,11 +168,48 @@ export default function ProjectDashboard({
       </div>
 
       {empty && (
-        <div className="flex flex-col items-center justify-center py-24 text-center gap-3">
-          <IconCircleCheck className="size-12 text-muted-foreground/20" />
-          <p className="text-muted-foreground">
-            No data yet. Enable simulation or send real events to get started.
+        <div className="rounded-lg border-2 bg-card p-8 w-full ">
+          <h2 className="font-semibold text-base mb-1">Getting started</h2>
+          <p className="text-sm text-muted-foreground mb-5">
+            Three steps to see your first issues:
           </p>
+          <ol className="space-y-4 mb-6">
+            {[
+              {
+                n: "1",
+                text: (
+                  <>
+                    Open <span className="font-medium text-foreground">Integrations</span> and pick a source — Stripe, Sentry, FullStory, or Zendesk.
+                  </>
+                ),
+              },
+              {
+                n: "2",
+                text: (
+                  <>
+                    Turn on the <span className="font-medium text-foreground">Simulate</span> toggle. Sample events start flowing immediately — no webhook setup needed.
+                  </>
+                ),
+              },
+              {
+                n: "3",
+                text: "Come back here. Autopilot will group the events into issues and rank them for you.",
+              },
+            ].map(({ n, text }) => (
+              <li key={n} className="flex gap-3 text-sm text-muted-foreground">
+                <span className="shrink-0 size-5 rounded-full border flex items-center justify-center text-xs font-medium text-foreground">
+                  {n}
+                </span>
+                <span className="leading-relaxed">{text}</span>
+              </li>
+            ))}
+          </ol>
+          <Link
+            href={`/projects/${slug}/integrations`}
+            className="inline-flex items-center gap-1.5 text-sm font-medium hover:underline"
+          >
+            Go to Integrations →
+          </Link>
         </div>
       )}
 
