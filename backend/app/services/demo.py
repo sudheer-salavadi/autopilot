@@ -17,11 +17,38 @@ from app.db.session import AsyncSessionLocal
 logger = logging.getLogger(__name__)
 
 
+# ── PostHog LLM observability ─────────────────────────────────────────────────
+
+_ph_singleton = None
+
+def _get_ph():
+    """Returns the PostHog singleton client, or None when POSTHOG_API_KEY is unset."""
+    global _ph_singleton
+    if _ph_singleton is None and settings.POSTHOG_API_KEY:
+        from posthog import Posthog
+        _ph_singleton = Posthog(settings.POSTHOG_API_KEY, host=settings.POSTHOG_HOST)
+    return _ph_singleton
+
+
+def _make_openai(base_url: str | None = None, api_key: str = "", timeout: int | None = None) -> AsyncOpenAI:
+    """Returns an AsyncOpenAI client, wrapped with PostHog when configured."""
+    ph = _get_ph()
+    kwargs: dict = {"api_key": api_key}
+    if base_url:
+        kwargs["base_url"] = base_url
+    if timeout is not None:
+        kwargs["timeout"] = timeout
+    if ph:
+        from posthog.ai.openai import AsyncOpenAI as PhAsyncOpenAI
+        return PhAsyncOpenAI(posthog_client=ph, **kwargs)
+    return AsyncOpenAI(**kwargs)
+
+
 def _ai_client() -> Tuple[AsyncOpenAI, str, bool]:
     """Returns (client, model, is_local). Prefers LM Studio when LM_STUDIO_URL is set."""
     if settings.LM_STUDIO_URL:
         return (
-            AsyncOpenAI(
+            _make_openai(
                 base_url=settings.LM_STUDIO_URL,
                 api_key="lm-studio",
                 timeout=settings.LM_STUDIO_TIMEOUT,
@@ -29,7 +56,7 @@ def _ai_client() -> Tuple[AsyncOpenAI, str, bool]:
             settings.LM_STUDIO_MODEL or "local-model",
             True,
         )
-    return AsyncOpenAI(api_key=settings.OPENAI_API_KEY), "gpt-5-nano-2025-08-07", False
+    return _make_openai(api_key=settings.OPENAI_API_KEY), "gpt-5-nano-2025-08-07", False
 
 
 def _parse_json(text: str) -> dict:
@@ -41,14 +68,24 @@ def _parse_json(text: str) -> dict:
     return json.loads(text)
 
 
-async def ai_chat(messages: list[dict], temperature: float = 0.3) -> str:
+async def ai_chat(
+    messages: list[dict],
+    temperature: float = 0.3,
+    posthog_distinct_id: str = "autopilot-system",
+    posthog_properties: dict | None = None,
+) -> str:
     """Call the primary AI model and return the content string.
 
     Falls back to Gemini (via its OpenAI-compatible endpoint) if the primary
     call fails and GEMINI_API_KEY is configured.
+    PostHog LLM observability is enabled automatically when POSTHOG_API_KEY is set.
     """
     client, model, is_local = _ai_client()
     kwargs = {} if is_local else {"response_format": {"type": "json_object"}}
+    if _get_ph():
+        kwargs["posthog_distinct_id"] = posthog_distinct_id
+        if posthog_properties:
+            kwargs["posthog_properties"] = posthog_properties
     logger.info("AI call → model=%s", model)
     try:
         response = await client.chat.completions.create(
@@ -86,17 +123,22 @@ async def ai_chat(messages: list[dict], temperature: float = 0.3) -> str:
             raise
         logger.info("Falling back to Gemini (%s)", settings.GEMINI_MODEL)
 
-    gemini = AsyncOpenAI(
+    gemini = _make_openai(
         base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
         api_key=settings.GEMINI_API_KEY,
     )
     logger.info("AI call → model=%s (Gemini fallback)", settings.GEMINI_MODEL)
+    gemini_kwargs: dict = {"response_format": {"type": "json_object"}}
+    if _get_ph():
+        gemini_kwargs["posthog_distinct_id"] = posthog_distinct_id
+        if posthog_properties:
+            gemini_kwargs["posthog_properties"] = posthog_properties
     try:
         response = await gemini.chat.completions.create(
             model=settings.GEMINI_MODEL,
             messages=messages,
             temperature=temperature,
-            response_format={"type": "json_object"},
+            **gemini_kwargs,
         )
         logger.info("AI call ✓ model=%s (Gemini fallback)", settings.GEMINI_MODEL)
         return response.choices[0].message.content
@@ -107,36 +149,100 @@ async def ai_chat(messages: list[dict], temperature: float = 0.3) -> str:
         logger.error("Gemini fallback also failed: %s", e)
         raise
 
+# Scenarios are grouped into 4 cross-source crisis themes so events from different
+# sources describe the same underlying incident and cluster together tightly.
+#
+# Theme A — Checkout/Payment meltdown
+# Theme B — Enterprise subscription renewal failures
+# Theme C — Invoice portal & PDF generation outage
+# Theme D — Premium feature degradation causing churn risk
+
 STRIPE_SCENARIOS = [
-    "A customer's payment fails due to insufficient funds. Retries also fail.",
-    "A new customer completes their first subscription purchase.",
-    "A customer upgrades from a free plan to a paid plan mid-cycle.",
-    "A customer's card expires and their subscription enters past_due status.",
-    "A high-value customer requests a refund after a failed feature rollout.",
+    # Theme A: Checkout meltdown — mass payment failures at the moment of purchase
+    "A surge of enterprise checkout sessions is failing: payment_intent.payment_failed for "
+    "multiple high-value customers, amounts ranging from $12,000 to $85,000. "
+    "Stripe retries are exhausting without success.",
+
+    # Theme B: Enterprise renewal failures — large annual contracts going past_due
+    "Several enterprise annual subscription invoices ($18,000–$95,000) have failed renewal. "
+    "Subscriptions entered past_due status; one customer already disputed a prior charge. "
+    "Automatic retries failed twice.",
+
+    # Theme C: Invoice payment failures and refund demands
+    "Three enterprise customers have filed invoice disputes totalling over $120,000 after "
+    "being double-charged. Refund requests are pending. One high-value subscription is at "
+    "risk of cancellation.",
+
+    # Theme D: Subscription downgrades after feature outage
+    "Six enterprise customers downgraded from the $15,000/yr plan citing a broken premium "
+    "feature. Two more have requested full refunds ($24,000 and $36,000) with churn risk noted "
+    "in their accounts.",
 ]
 
 SENTRY_SCENARIOS = [
-    "An unhandled exception occurs in the payment processing service.",
-    "A database connection timeout spikes during a traffic surge.",
-    "A feature flag service throws a null-pointer error for premium users.",
-    "An API rate-limit error cascades into a queue backlog.",
-    "A background job fails silently and starts producing corrupt output.",
+    # Theme A: Payment service errors during checkout
+    "A NullPointerException in PaymentService.processCheckout() is throwing for every third "
+    "checkout attempt. The error is caught but returns a 500 to the client, silently failing "
+    "payment confirmation. Affects all customers in production.",
+
+    # Theme B: Subscription renewal job crashing
+    "The nightly subscription renewal background job is crashing with a DatabaseTimeoutError "
+    "after processing ~40% of enterprise invoices. The remaining 60% are left unprocessed, "
+    "triggering Stripe's automatic retry logic unnecessarily.",
+
+    # Theme C: Invoice PDF generation service down
+    "The invoice PDF generation endpoint (/api/invoices/:id/pdf) is throwing an "
+    "UnhandledPromiseRejection — the underlying wkhtmltopdf process is segfaulting. "
+    "All invoice download requests are returning 500.",
+
+    # Theme D: Feature flag service errors for premium tier
+    "The feature flag evaluation service is returning null for the 'enterprise_features' "
+    "flag segment. Premium-tier users receive a FeatureFlagError and lose access to "
+    "advanced analytics, SSO, and API rate-limit overrides.",
 ]
 
 FULLSTORY_SCENARIOS = [
-    "Users repeatedly rage-click the checkout button after a payment form validation error.",
-    "Dead clicks on a disabled 'Upgrade Plan' CTA reveal a broken feature flag for free-tier users.",
-    "Users thrash the navigation menu during a slow API response, then abandon the session.",
-    "Error clicks on the invoice download button expose a broken PDF generation endpoint.",
-    "A cohort of high-value users exhibit frustration signals on the billing settings page after a price change.",
+    # Theme A: Rage-clicks on checkout payment button
+    "Enterprise users are rage-clicking the 'Complete Purchase' button on /checkout/payment "
+    "after card validation silently fails. Click counts of 8–15 per session indicate extreme "
+    "frustration before users abandon.",
+
+    # Theme B: Dead-clicks on 'Renew Subscription' CTA
+    "High-value users are dead-clicking 'Renew Now' on /billing/subscription — the button "
+    "renders but the click handler is missing after a deploy. Users thrash then navigate away, "
+    "signalling imminent churn.",
+
+    # Theme C: Error-clicks on invoice download
+    "Users are clicking 'Download Invoice' on /billing/invoices repeatedly and receiving "
+    "error toasts. Sessions show 6–12 frustrated clicks before users open a support chat. "
+    "Affects the entire /billing/invoices/* path.",
+
+    # Theme D: Thrash on premium feature pages after access loss
+    "Enterprise users are thrashing between /features/analytics and /upgrade after losing "
+    "access to premium features mid-session. Sessions terminate with support widget open, "
+    "indicating escalation intent.",
 ]
 
 ZENDESK_SCENARIOS = [
-    "A customer opens an urgent ticket because they can't complete a payment at checkout.",
-    "Multiple customers report being unable to access their account after a backend deployment.",
-    "A high-value customer files a ticket about an incorrect charge on their invoice.",
-    "A batch of users reports the upgrade flow is broken and they can't access paid features.",
-    "Customers complain about slow load times on the billing settings page and missing invoice history.",
+    # Theme A: Cannot complete checkout — payment failures
+    "Multiple enterprise customers have opened URGENT tickets reporting that their team cannot "
+    "complete purchases. One customer mentions a $50,000 contract order stuck at the payment "
+    "step for 2 hours. CS team is manually escalating.",
+
+    # Theme B: Subscription lapsed, team locked out of paid features
+    "An enterprise customer with 200 seats reports their subscription lapsed despite having "
+    "valid payment on file. Their entire team lost access to the product overnight. "
+    "Customer is threatening cancellation of their $72,000/yr contract.",
+
+    # Theme C: Invoice history missing and double-charge dispute
+    "Three enterprise accounts are disputing duplicate invoice charges. One customer reports "
+    "being charged twice for a $45,000 annual contract. Invoice history shows blank for all "
+    "affected accounts — customers cannot download receipts for accounting.",
+
+    # Theme D: Enterprise features broken after update
+    "Six enterprise customers opened tickets within 90 minutes reporting that SSO, advanced "
+    "reporting, and API access stopped working simultaneously after last night's deploy. "
+    "Two customers explicitly mentioned evaluating competitors.",
 ]
 
 SYSTEM_PROMPT = """You are a webhook payload generator for a SaaS observability demo.
@@ -148,8 +254,6 @@ async def generate_demo_events(
     source: str,
     context_events: list[dict] | None = None,
 ) -> list[dict]:
-    client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-
     if source == "stripe":
         scenario = random.choice(STRIPE_SCENARIOS)
         format_rules = """Stripe webhook format rules:
@@ -158,9 +262,13 @@ async def generate_demo_events(
 - data.object: the Stripe resource (PaymentIntent, Subscription, Invoice, etc.)
 - data.object must include: id (pi_xxx / sub_xxx / in_xxx), object, amount, currency,
   customer ("cus_<id>"), status, metadata: {user_id, email}
-- created: Unix timestamp"""
-        event_count = "3-4"
-        event_types = "e.g. payment_intent.payment_failed, payment_intent.succeeded, customer.subscription.updated, invoice.payment_failed"
+- created: Unix timestamp
+- IMPORTANT: This is an enterprise SaaS product. Use realistic enterprise contract amounts:
+  amount values must be in CENTS and range from 1200000 to 9500000 (i.e. $12,000–$95,000).
+  Use failure/at-risk event types only — do NOT generate payment_intent.succeeded or
+  customer.subscription.created events."""
+        event_count = "6-8"
+        event_types = "payment_intent.payment_failed, invoice.payment_failed, customer.subscription.updated (to past_due), charge.dispute.created, invoice.payment_action_required"
 
     elif source == "sentry":
         scenario = random.choice(SENTRY_SCENARIOS)
@@ -172,9 +280,10 @@ async def generate_demo_events(
     user: {id, email},
     tags: [["customer_id","cus_xxx"], ["environment","production"]],
     timestamp: ISO-8601}
-- data.issue: {id, title, culprit, status: "unresolved", level: "error"}"""
-        event_count = "3-4"
-        event_types = "e.g. event.alert, issue.created, issue.resolved"
+- data.issue: {id, title, culprit, status: "unresolved", level: "error"}
+- Use level: "error" or "fatal" — never "info" or "debug"."""
+        event_count = "5-7"
+        event_types = "event.alert, issue.created"
 
     elif source == "fullstory":
         scenario = random.choice(FULLSTORY_SCENARIOS)
@@ -195,9 +304,10 @@ async def generate_demo_events(
     click_count: <int, relevant for rage_click>,
     user_id: "<app user id>",
     user_email: "<user email address>"
-  }"""
-        event_count = "3-5"
-        event_types = "rage_click, dead_click, error_click, thrash"
+  }
+- Prefer rage_click and error_click — these are the strongest frustration signals."""
+        event_count = "5-7"
+        event_types = "rage_click, error_click, dead_click, thrash"
 
     else:  # zendesk
         scenario = random.choice(ZENDESK_SCENARIOS)
@@ -226,8 +336,10 @@ async def generate_demo_events(
     is_public: true,
     via: {"channel": "web_service" | "email" | "api"}
   }
-- event: {"meta": {"sequence": {"id": <large int>, "position": 1}}}"""
-        event_count = "2-3"
+- event: {"meta": {"sequence": {"id": <large int>, "position": 1}}}
+- Use priority "URGENT" or "HIGH" — never "NORMAL" or "LOW".
+- type should be "PROBLEM" or "INCIDENT"."""
+        event_count = "4-5"
         event_types = "zen:event-type:ticket.created, zen:event-type:ticket.updated"
 
     # Build correlation context if we have events from other sources

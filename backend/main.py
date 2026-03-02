@@ -126,6 +126,10 @@ async def lifespan(app: FastAPI):
             await task
         except asyncio.CancelledError:
             pass
+    from app.services.demo import _get_ph
+    ph = _get_ph()
+    if ph:
+        ph.flush()
 
 
 app = FastAPI(title="Autopilot API", version="0.1.0", lifespan=lifespan)
