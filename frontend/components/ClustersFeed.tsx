@@ -35,43 +35,52 @@ import {
  *   snake_case          → monospace chip
  *   dot.notation        → monospace chip
  */
-function formatRootCause(text: string): React.ReactNode {
-  // Match in priority order: backtick > full URL > /path > currency > snake_case > dot.notation
-  const pattern = /(`[^`]+`|https?:\/\/[^\s,;]+|\/[a-zA-Z][a-zA-Z0-9/_-]+|\$[\d,]+(?:\.\d{1,2})?|\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b|\b[a-z][a-z0-9]*(?:\.[a-z][a-z0-9_]+)+\b)/g;
+// Shared regex — order matters, first match wins:
+//   backtick > full URL > /path > currency
+//   > short IDs like cus_AZ1 / pi_XyZ  (mixed-case after underscore, e.g. Stripe mocks)
+//   > snake_case  > dot.notation
+const TOKEN_RE = /(`[^`]+`|https?:\/\/[^\s,;]+|\/[a-zA-Z][a-zA-Z0-9/_-]+|\$[\d,]+(?:\.\d{1,2})?|\b[a-z]{2,6}_[A-Za-z0-9]{2,}\b|\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b|\b[a-z][a-z0-9]*(?:\.[a-z][a-z0-9_]+)+\b)/g;
 
+function tokenize(
+  text: string,
+  render: (display: string, token: string, key: number) => React.ReactNode,
+): React.ReactNode {
+  const pattern = new RegExp(TOKEN_RE.source, "g");
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
   let key = 0;
   let match: RegExpExecArray | null;
-
   while ((match = pattern.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      parts.push(text.slice(lastIndex, match.index));
-    }
-
+    if (match.index > lastIndex) parts.push(text.slice(lastIndex, match.index));
     const token = match[0];
-    const isCurrency = token.startsWith("$");
     const display = token.startsWith("`") ? token.slice(1, -1) : token;
-
-    if (isCurrency) {
-      parts.push(
-        <span key={key++} className="font-mono  font-semibold px-1 py-0.5 rounded bg-amber-100 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300">
-          {display}
-        </span>
-      );
-    } else {
-      parts.push(
-        <code key={key++} className="font-mono bg-blue-50 dark:bg-blue-950/40 px-1 py-0.5 text-blue-950 dark:text-blue-100 rounded">
-          {display}
-        </code>
-      );
-    }
-
+    parts.push(render(display, token, key++));
     lastIndex = match.index + token.length;
   }
-
   if (lastIndex < text.length) parts.push(text.slice(lastIndex));
   return parts.length > 1 ? parts : text;
+}
+
+// Blue chips — for root_cause and pm_insight
+function formatRootCause(text: string): React.ReactNode {
+  return tokenize(text, (display, token, key) =>
+    token.startsWith("$") ? (
+      <span key={key} className="font-mono font-semibold px-1 py-0.5 rounded bg-amber-100 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300">
+        {display}
+      </span>
+    ) : (
+      <code key={key} className="font-mono bg-blue-50 dark:bg-blue-950/40 px-1 py-0.5 text-blue-950 dark:text-blue-100 rounded">
+        {display}
+      </code>
+    )
+  );
+}
+
+// Plain mono — for titles (no background, no colour change)
+function formatTitle(text: string): React.ReactNode {
+  return tokenize(text, (display, _token, key) => (
+    <code key={key} className="font-mono text-[0.9em]">{display}</code>
+  ));
 }
 
 type SeverityLevel = "Critical" | "High" | "Medium" | "Low" | "Lowest";
@@ -610,7 +619,7 @@ function ClusterDetail({
               </Badge>
             )}
           </div>
-          <h2 className="font-semibold text-sm leading-snug">{formatRootCause(cluster.title)}</h2>
+          <h2 className="font-semibold text-sm leading-snug">{formatTitle(cluster.title)}</h2>
           {/* <p className="text-xs text-muted-foreground mt-0.5">
             {cluster.event_count} events · {cluster.affected_users} user{cluster.affected_users !== 1 ? "s" : ""} · last seen {timeAgo(cluster.last_seen)}
           </p> */}
@@ -1456,7 +1465,7 @@ export default function ClustersFeed({
                     <td className="px-3 py-3 max-w-0">
                       <div className="flex items-center gap-2 min-w-0">
                         <PriorityIcon score={cluster.priority_score} />
-                        <span className="font-medium truncate">{formatRootCause(cluster.title)}</span>
+                        <span className="font-medium truncate">{formatTitle(cluster.title)}</span>
                         {cluster.github_issue_number && (
                           <Tooltip>
                             <TooltipTrigger asChild>
@@ -1523,7 +1532,7 @@ export default function ClustersFeed({
 
       {/* ── How it works sheet ──────────────────────────────────────── */}
       <Sheet open={showHelp} onOpenChange={setShowHelp}>
-        <SheetContent side="right" className="w-full sm:max-w-2xl p-6 overflow-y-auto">
+        <SheetContent side="right" className="w-full sm:max-w-2xl  md:min-w-xl lg:min-w-2xl p-6 overflow-y-auto">
           <SheetTitle className="flex items-center gap-2 mb-6">
             <IconHelpCircle className="size-4 " />
             How Issues work
@@ -1620,11 +1629,11 @@ export default function ClustersFeed({
 
             {/* github */}
             <div className="space-y-2">
-              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">GitHub issues</p>
-              <p className="text-muted-foreground leading-relaxed">
+              <p className="text-xs font-semibold uppercase tracking-wider">GitHub issues</p>
+              <p className="text-neutral-800 dark:text-neutral-200 leading-relaxed">
                 Autopilot only files a GitHub issue when the cluster is <span className="text-foreground font-medium">engineering-actionable</span> — meaning it contains at least one non-Stripe event, or a Stripe error that's caused by your code (e.g. <code className="font-mono bg-muted px-1 rounded">invalid_request_error</code>), not a customer's bank declining their card.
               </p>
-              <p className="text-muted-foreground leading-relaxed">
+              <p className="text-neutral-800 dark:text-neutral-200 leading-relaxed">
                 Customer-side failures like <code className="font-mono bg-muted px-1 rounded">insufficient_funds</code> or <code className="font-mono bg-muted px-1 rounded">card_expired</code> are surfaced in the Issues feed but do not create GitHub noise — they belong to Customer Success, not engineering.
               </p>
             </div>
