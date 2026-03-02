@@ -30,18 +30,20 @@ def verify_session_token(token: str) -> str | None:
         return None
 
 
-async def get_or_create_user(db: AsyncSession, workos_user: dict) -> User:
+async def get_or_create_user(db: AsyncSession, workos_user) -> User:
     result = await db.execute(
-        select(User).where(User.workos_user_id == workos_user["id"])
+        select(User).where(User.workos_user_id == workos_user.id)
     )
     user = result.scalar_one_or_none()
     if user:
         return user
 
+    first = getattr(workos_user, "first_name", "") or ""
+    last = getattr(workos_user, "last_name", "") or ""
     user = User(
-        workos_user_id=workos_user["id"],
-        email=workos_user.get("email", ""),
-        name=f"{workos_user.get('first_name', '')} {workos_user.get('last_name', '')}".strip(),
+        workos_user_id=workos_user.id,
+        email=getattr(workos_user, "email", "") or "",
+        name=f"{first} {last}".strip(),
     )
     db.add(user)
     await db.flush()

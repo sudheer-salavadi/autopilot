@@ -24,9 +24,8 @@ async def callback(code: str, response: Response, db=Depends(get_db)):
     auth_response = workos_client.user_management.authenticate_with_code(
         code=code,
     )
-    workos_user = auth_response.user.model_dump()
 
-    user = await get_or_create_user(db, workos_user)
+    user = await get_or_create_user(db, auth_response.user)
     token = create_session_token(str(user.id))
 
     redirect = RedirectResponse(url=f"{settings.FRONTEND_URL}/dashboard")
