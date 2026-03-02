@@ -246,7 +246,7 @@ export default function ProjectDashboard({
                     <tr
                       key={c.id}
                       className="hover:bg-muted/30 transition-colors cursor-pointer group"
-                      onClick={() => window.location.href = `/projects/${slug}/issues`}
+                      onClick={() => window.location.href = `/projects/${slug}/issues?open=${c.id}`}
                     >
                       <td className="px-4 py-3 max-w-0">
                         <div className="flex items-center gap-2 min-w-0">

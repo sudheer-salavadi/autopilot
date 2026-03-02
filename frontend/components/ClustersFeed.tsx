@@ -1094,9 +1094,11 @@ function SortableHeader({
 export default function ClustersFeed({
   slug,
   initialData,
+  openId,
 }: {
   slug: string;
   initialData?: ClustersPage | null;
+  openId?: string;
 }) {
   // ── view / filter / sort / page state ────────────────────────────────────
   const [view, setView]               = useState<"active" | "resolved">("active");
@@ -1155,6 +1157,19 @@ export default function ClustersFeed({
 
   // Reset selection + page when view/search/sort change
   useEffect(() => { setSelected(new Set()); setActiveCluster(null); setPage(1); }, [view, search]);
+
+  // Auto-open a specific cluster when arriving via deep-link (e.g. dashboard → issues?open=<id>)
+  const openedRef = useRef(false);
+  useEffect(() => {
+    if (!openId || !data?.items || openedRef.current) return;
+    const cluster = data.items.find((c) => c.id === openId);
+    if (cluster) {
+      openedRef.current = true;
+      setActiveCluster(cluster);
+      // Strip ?open= from the URL so refreshing or navigating back doesn't re-open
+      window.history.replaceState(null, "", `/projects/${slug}/issues`);
+    }
+  }, [openId, data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Apply optimistic updates to a cluster (e.g. after filing a GitHub issue)
   function handleClusterUpdated(id: string, patch: Partial<Cluster>) {
