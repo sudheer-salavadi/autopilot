@@ -713,7 +713,7 @@ function ClusterDetail({
             {cluster.pm_insight && (
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1"><IconSparkles className="inline mr-1 size-3" />Recommended Solution</p>
-              <p className="leading-relaxed">{cluster.pm_insight}</p>
+              <p className="leading-relaxed">{formatRootCause(cluster.pm_insight)}</p>
             </div>
             )}      
 
