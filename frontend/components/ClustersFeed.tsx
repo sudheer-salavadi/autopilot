@@ -8,6 +8,14 @@ import { apiClient } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   Sheet,
   SheetContent,
   SheetTitle,
@@ -1105,6 +1113,7 @@ export default function ClustersFeed({
 
   const [evaluating, setEvaluating]         = useState(false);
   const [reclustering, setReclustering]     = useState(false);
+  const [autoEvaluating, setAutoEvaluating] = useState(false);
   const [selected, setSelected]             = useState<Set<string>>(new Set());
   const [activeCluster, setActiveCluster]   = useState<Cluster | null>(null);
   const [showHelp, setShowHelp]             = useState(false);
@@ -1202,6 +1211,24 @@ export default function ClustersFeed({
     });
   }
 
+  // Poll backend every 5 s to detect auto-evaluation triggered by incoming events.
+  // When a running job finishes, refetch clusters automatically.
+  useEffect(() => {
+    let prev = false;
+    const poll = async () => {
+      try {
+        const res = await api.get<{ running: boolean }>(`/api/projects/${slug}/clusters/evaluating`);
+        const running = res.running ?? false;
+        setAutoEvaluating(running);
+        if (prev && !running) refetch();
+        prev = running;
+      } catch { /* ignore */ }
+    };
+    poll();
+    const id = setInterval(poll, 5000);
+    return () => clearInterval(id);
+  }, [slug]); // eslint-disable-line react-hooks/exhaustive-deps
+
   async function handleEvaluate() {
     setEvaluating(true);
     try {
@@ -1275,18 +1302,29 @@ export default function ClustersFeed({
             )}
           </p>
 
-          {view === "active" && (
-            <>
-              <Button size="sm" variant="outline" onClick={handleEvaluate} disabled={evaluating || reclustering} className="gap-2 shrink-0">
-                <IconRefresh className={`size-4 ${evaluating ? "animate-spin" : ""}`} />
-                Evaluate now
-              </Button>
-              <Button size="sm" variant="outline" onClick={handleRecluster} disabled={evaluating || reclustering} className="gap-2 shrink-0 text-muted-foreground hover:text-foreground">
-                <IconRefresh className={`size-4 ${reclustering ? "animate-spin" : ""}`} />
-                Re-cluster all
-              </Button>
-            </>
-          )}
+          {view === "active" && (() => {
+            const isRunning = evaluating || reclustering || autoEvaluating;
+            return (
+              <DropdownMenu>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <DropdownMenuTrigger asChild>
+                      <Button size="icon" variant="outline" disabled={isRunning} className="shrink-0 size-8">
+                        <IconRefresh className={`size-4 ${isRunning ? "animate-spin" : ""}`} />
+                      </Button>
+                    </DropdownMenuTrigger>
+                  </TooltipTrigger>
+                  <TooltipContent>{isRunning ? "Evaluation in progress" : "Evaluate"}</TooltipContent>
+                </Tooltip>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuLabel>Evaluate</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={handleEvaluate}>New Data</DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleRecluster}>All Data</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            );
+          })()}
 
           <button
             onClick={() => setShowHelp(true)}

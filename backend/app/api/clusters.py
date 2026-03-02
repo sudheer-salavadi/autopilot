@@ -2,7 +2,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -170,6 +170,23 @@ async def update_cluster_status(
     out = ClusterOut.model_validate(cluster)
     out.event_ids = [ce.event_id for ce in cluster.cluster_events]
     return out
+
+
+@router.get("/clusters/evaluating")
+async def is_evaluating(
+    deps=Depends(require_project_member),
+    db: AsyncSession = Depends(get_db),
+):
+    """Returns whether an evaluation job is currently pending or running for this project."""
+    project, _, _ = deps
+    result = await db.execute(
+        text(
+            "SELECT 1 FROM evaluation_jobs "
+            "WHERE project_id = :pid AND status IN ('pending', 'running') LIMIT 1"
+        ),
+        {"pid": str(project.id)},
+    )
+    return {"running": result.scalar() is not None}
 
 
 @router.post("/clusters/evaluate")
