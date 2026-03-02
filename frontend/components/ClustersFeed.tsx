@@ -610,7 +610,7 @@ function ClusterDetail({
               </Badge>
             )}
           </div>
-          <h2 className="font-semibold text-sm leading-snug">{cluster.title}</h2>
+          <h2 className="font-semibold text-sm leading-snug">{formatRootCause(cluster.title)}</h2>
           {/* <p className="text-xs text-muted-foreground mt-0.5">
             {cluster.event_count} events · {cluster.affected_users} user{cluster.affected_users !== 1 ? "s" : ""} · last seen {timeAgo(cluster.last_seen)}
           </p> */}
@@ -1456,7 +1456,7 @@ export default function ClustersFeed({
                     <td className="px-3 py-3 max-w-0">
                       <div className="flex items-center gap-2 min-w-0">
                         <PriorityIcon score={cluster.priority_score} />
-                        <span className="font-medium truncate">{cluster.title}</span>
+                        <span className="font-medium truncate">{formatRootCause(cluster.title)}</span>
                         {cluster.github_issue_number && (
                           <Tooltip>
                             <TooltipTrigger asChild>
@@ -1523,7 +1523,7 @@ export default function ClustersFeed({
 
       {/* ── How it works sheet ──────────────────────────────────────── */}
       <Sheet open={showHelp} onOpenChange={setShowHelp}>
-        <SheetContent side="right" className="w-full sm:max-w-xl p-6 overflow-y-auto">
+        <SheetContent side="right" className="w-full sm:max-w-2xl p-6 overflow-y-auto">
           <SheetTitle className="flex items-center gap-2 mb-6">
             <IconHelpCircle className="size-4 text-muted-foreground" />
             How Issues work
