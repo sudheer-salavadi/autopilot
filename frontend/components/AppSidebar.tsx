@@ -182,9 +182,9 @@ export default function AppSidebar({
                     {user.name && (
                       <p className="text-xs text-muted-foreground truncate">{user.email}</p>
                     )}
-                    <p className="truncate font-mono text-[11px] text-muted-foreground/60">
+                    {/* <p className="truncate font-mono text-[11px] text-muted-foreground/60">
                       {user.id}
-                    </p>
+                    </p> */}
                   </div>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem asChild>

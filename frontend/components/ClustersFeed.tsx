@@ -180,32 +180,6 @@ function frequencyLabel(count: number) {
 
 // ── select-all checkbox (handles indeterminate state) ────────────────────────
 
-function IndeterminateCheckbox({
-  checked,
-  indeterminate,
-  onChange,
-  onClick,
-}: {
-  checked: boolean;
-  indeterminate: boolean;
-  onChange: (checked: boolean) => void;
-  onClick?: (e: React.MouseEvent) => void;
-}) {
-  const ref = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (ref.current) ref.current.indeterminate = indeterminate;
-  }, [indeterminate]);
-  return (
-    <input
-      ref={ref}
-      type="checkbox"
-      checked={checked}
-      onChange={(e) => onChange(e.target.checked)}
-      onClick={onClick}
-      className="h-4 w-4 rounded border-border accent-foreground cursor-pointer"
-    />
-  );
-}
 
 // ── source icon ───────────────────────────────────────────────────────────────
 
@@ -643,7 +617,7 @@ function ClusterDetail({
                 size="sm"
                 onClick={handleCreateIssue}
                 disabled={filingIssue}
-                className="h-7 px-2 text-xs gap-1.5 text-muted-foreground"
+                className="h-7 px-2 text-xs gap-1.5"
               >
                 <IconBrandGithub className="size-3.5" />
                 {filingIssue ? "Filing…" : "Create GitHub issue"}
@@ -1126,10 +1100,9 @@ export default function ClustersFeed({
   const [evaluating, setEvaluating]         = useState(false);
   const [reclustering, setReclustering]     = useState(false);
   const [autoEvaluating, setAutoEvaluating] = useState(false);
-  const [selected, setSelected]             = useState<Set<string>>(new Set());
   const [activeCluster, setActiveCluster]   = useState<Cluster | null>(null);
   const [showHelp, setShowHelp]             = useState(false);
-  const [detailWidth, setDetailWidth]       = useState(420);
+  const [detailWidth, setDetailWidth]       = useState(500);
   const [isDragging, setIsDragging]         = useState(false);
   const dragState = useRef<{ startX: number; startWidth: number } | null>(null);
   const isXl = useIsXl();
@@ -1165,8 +1138,8 @@ export default function ClustersFeed({
     setPage(1);
   }
 
-  // Reset selection + page when view/search/sort change
-  useEffect(() => { setSelected(new Set()); setActiveCluster(null); setPage(1); }, [view, search]);
+  // Reset active cluster + page when view/search/sort change
+  useEffect(() => { setActiveCluster(null); setPage(1); }, [view, search]);
 
   // Auto-open a specific cluster when arriving via deep-link (e.g. dashboard → issues?open=<id>)
   const openedRef = useRef(false);
@@ -1222,19 +1195,6 @@ export default function ClustersFeed({
   const pageStart   = (clampedPage - 1) * PAGE_SIZE;
   const clusters    = sorted.slice(pageStart, pageStart + PAGE_SIZE);
 
-  const allSelected = clusters.length > 0 && clusters.every((c) => selected.has(c.id));
-  const someSelected = selected.size > 0 && !allSelected;
-
-  function toggleAll(checked: boolean) {
-    setSelected(checked ? new Set(clusters.map((c) => c.id)) : new Set());
-  }
-  function toggleOne(id: string) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
-  }
 
   // Poll backend every 5 s to detect auto-evaluation triggered by incoming events.
   // When a running job finishes, refetch clusters automatically.
@@ -1331,9 +1291,6 @@ export default function ClustersFeed({
 
           <p className="text-xs text-muted-foreground shrink-0">
             {data ? `${totalItems} issue${totalItems !== 1 ? "s" : ""}` : ""}
-            {selected.size > 0 && (
-              <span className="ml-1.5 text-foreground font-medium">· {selected.size} selected</span>
-            )}
           </p>
 
           {view === "active" && (() => {
@@ -1421,15 +1378,6 @@ export default function ClustersFeed({
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b bg-muted/40">
-                  {view === "active" && (
-                    <th className="w-10 px-3 py-2.5">
-                      <IndeterminateCheckbox
-                        checked={allSelected}
-                        indeterminate={someSelected}
-                        onChange={toggleAll}
-                      />
-                    </th>
-                  )}
                   <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground">
                     <SortableHeader label="Issue" sortKey="priority_score" currentSortBy={sortBy} currentSortDir={sortDir} onSort={handleSort} />
                   </th>
@@ -1459,16 +1407,6 @@ export default function ClustersFeed({
                       activeCluster?.id === cluster.id ? "bg-foreground/[.05]" : "hover:bg-muted/60"
                     }`}
                   >
-                    {view === "active" && (
-                      <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
-                        <input
-                          type="checkbox"
-                          checked={selected.has(cluster.id)}
-                          onChange={() => toggleOne(cluster.id)}
-                          className="h-4 w-4 rounded border-border accent-foreground cursor-pointer"
-                        />
-                      </td>
-                    )}
                     <td className="px-3 py-3 max-w-0">
                       <div className="flex items-center gap-2 min-w-0">
                         <PriorityIcon score={cluster.priority_score} />
