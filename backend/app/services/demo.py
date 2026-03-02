@@ -73,15 +73,17 @@ async def ai_chat(
     temperature: float = 0.3,
     posthog_distinct_id: str = "autopilot-system",
     posthog_properties: dict | None = None,
+    json_mode: bool = True,
 ) -> str:
     """Call the primary AI model and return the content string.
 
     Falls back to Gemini (via its OpenAI-compatible endpoint) if the primary
     call fails and GEMINI_API_KEY is configured.
     PostHog LLM observability is enabled automatically when POSTHOG_API_KEY is set.
+    Set json_mode=False for plain-text responses (e.g. chat).
     """
     client, model, is_local = _ai_client()
-    kwargs = {} if is_local else {"response_format": {"type": "json_object"}}
+    kwargs = {} if is_local or not json_mode else {"response_format": {"type": "json_object"}}
     if _get_ph():
         kwargs["posthog_distinct_id"] = posthog_distinct_id
         if posthog_properties:
@@ -128,7 +130,7 @@ async def ai_chat(
         api_key=settings.GEMINI_API_KEY,
     )
     logger.info("AI call → model=%s (Gemini fallback)", settings.GEMINI_MODEL)
-    gemini_kwargs: dict = {"response_format": {"type": "json_object"}}
+    gemini_kwargs: dict = {} if not json_mode else {"response_format": {"type": "json_object"}}
     if _get_ph():
         gemini_kwargs["posthog_distinct_id"] = posthog_distinct_id
         if posthog_properties:

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { apiClient } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
@@ -31,11 +32,7 @@ export default function AccountSettings({ slug, projectName, userName }: Props) 
     setNameStatus("saving");
     setNameError(null);
     try {
-      await apiClient(`/api/projects/${slug}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name.trim() }),
-      });
+      await apiClient().put(`/api/projects/${slug}`, { name: name.trim() });
       setNameStatus("saved");
       setTimeout(() => setNameStatus("idle"), 2000);
     } catch {
@@ -51,11 +48,7 @@ export default function AccountSettings({ slug, projectName, userName }: Props) 
     setUserStatus("saving");
     setUserError(null);
     try {
-      await apiClient(`/api/auth/me`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: fullName }),
-      });
+      await apiClient().put(`/api/auth/me`, { name: fullName });
       setUserStatus("saved");
       setTimeout(() => setUserStatus("idle"), 2000);
     } catch {
