@@ -17,7 +17,7 @@ from app.db.session import AsyncSessionLocal
 from app.models.cluster import Cluster, ClusterEvent
 from app.models.event import Event
 from app.models.scoring_config import ProjectScoringConfig
-from app.services.demo import _ai_client, _parse_json
+from app.services.demo import ai_chat, _parse_json
 import app.services.sources as sources  # registers all plugins on import
 
 _EMBEDDING_MODEL = "text-embedding-3-small"
@@ -152,9 +152,6 @@ def _summarize_event(event: Event, cross_channel: bool = True) -> str:
 async def _assign_or_create(
     event_summary: str,
     open_clusters: list[Cluster],
-    client,
-    model: str,
-    is_local: bool,
     cross_channel: bool = True,
 ) -> dict:
     """Ask the LLM to assign this event to an existing cluster or create a new one."""
@@ -193,17 +190,14 @@ Otherwise respond:
 
 Respond only with JSON."""
 
-    kwargs = {} if is_local else {"response_format": {"type": "json_object"}}
-    response = await client.chat.completions.create(
-        model=model,
+    text = await ai_chat(
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_msg},
         ],
         temperature=0.1,
-        **kwargs,
     )
-    return _parse_json(response.choices[0].message.content)
+    return _parse_json(text)
 
 
 def _ux_signal(event: Event) -> float:
@@ -234,9 +228,6 @@ def _rich_event_line(e: Event) -> str:
 async def _regenerate_insight(
     cluster: Cluster,
     events: list[Event],
-    client,
-    model: str,
-    is_local: bool,
     cross_channel: bool = True,
 ) -> None:
     """Re-generate title and root_cause from the cluster's actual negative events.
@@ -300,10 +291,8 @@ Generate an accurate title and one-sentence root cause based solely on the event
 Respond only with JSON:
 {{"title":"<concise title, under 60 chars>","root_cause":"<one sentence — specific, names what broke and where>"}}"""
 
-    kwargs = {} if is_local else {"response_format": {"type": "json_object"}}
     try:
-        response = await client.chat.completions.create(
-            model=model,
+        text = await ai_chat(
             messages=[
                 {
                     "role": "system",
@@ -315,9 +304,8 @@ Respond only with JSON:
                 {"role": "user", "content": user_msg},
             ],
             temperature=0.1,
-            **kwargs,
         )
-        result = _parse_json(response.choices[0].message.content)
+        result = _parse_json(text)
         if result.get("title"):
             cluster.title = result["title"][:200]
         if result.get("root_cause"):
@@ -337,9 +325,6 @@ async def _generate_pm_insight(
     cluster: Cluster,
     events: list[Event],
     config: ProjectScoringConfig,
-    client,
-    model: str,
-    is_local: bool,
 ) -> None:
     """Generate a PM-quality insight: cross-source synthesis, owner, and recommended action.
 
@@ -455,18 +440,15 @@ Be direct. No filler. Name the specific component, page, or error type if the da
 
 Respond only with JSON: {{"insight": "<2-3 sentences>"}}"""
 
-    kwargs = {} if is_local else {"response_format": {"type": "json_object"}}
     try:
-        response = await client.chat.completions.create(
-            model=model,
+        text = await ai_chat(
             messages=[
                 {"role": "system", "content": "You are a senior PM writing concise incident insights. Respond only with JSON."},
                 {"role": "user", "content": prompt},
             ],
             temperature=0.2,
-            **kwargs,
         )
-        result = _parse_json(response.choices[0].message.content)
+        result = _parse_json(text)
         insight = result.get("insight", "")
         if insight:
             cluster.pm_insight = insight[:1000]
@@ -609,7 +591,6 @@ async def evaluate_project(project_id: uuid.UUID, db: AsyncSession) -> dict:
     )
     open_clusters = result.scalars().all()
 
-    client, model, is_local = _ai_client()
     cross_channel: bool = config.cross_channel
 
     clusters_created = 0
@@ -630,7 +611,7 @@ async def evaluate_project(project_id: uuid.UUID, db: AsyncSession) -> dict:
 
         try:
             decision = await _assign_or_create(
-                summary, candidates, client, model, is_local, cross_channel=cross_channel
+                summary, candidates, cross_channel=cross_channel
             )
         except Exception:
             # On LLM failure, create a new cluster rather than dropping the event
@@ -728,14 +709,10 @@ async def evaluate_project(project_id: uuid.UUID, db: AsyncSession) -> dict:
         # description always matches the scores (e.g. a cluster seeded with a
         # positive event but later filled with failures gets corrected here).
         if cluster.event_count >= 2:
-            await _regenerate_insight(
-                cluster, cluster_events, client, model, is_local, cross_channel
-            )
+            await _regenerate_insight(cluster, cluster_events, cross_channel)
             # Generate PM-quality synthesis: cross-source narrative + owner + action.
             # Runs after _regenerate_insight so it has the final title/root_cause.
-            await _generate_pm_insight(
-                cluster, cluster_events, config, client, model, is_local
-            )
+            await _generate_pm_insight(cluster, cluster_events, config)
 
     await db.commit()
 

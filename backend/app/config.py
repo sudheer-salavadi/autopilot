@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     LM_STUDIO_MODEL: str = ""      # model identifier as shown in LM Studio
     LM_STUDIO_TIMEOUT: int = 300   # seconds — local models are slow
 
+    # Gemini fallback (used when OpenAI/LM Studio call fails)
+    GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-2.0-flash"
+
     # URLs
     FRONTEND_URL: str = "http://localhost:3000"
     NEXT_PUBLIC_WORKOS_REDIRECT_URI: str = "http://localhost:8000/api/auth/callback"

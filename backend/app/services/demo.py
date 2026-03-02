@@ -37,6 +37,38 @@ def _parse_json(text: str) -> dict:
     text = re.sub(r"\s*```$", "", text)
     return json.loads(text)
 
+
+async def ai_chat(messages: list[dict], temperature: float = 0.3) -> str:
+    """Call the primary AI model and return the content string.
+
+    Falls back to Gemini (via its OpenAI-compatible endpoint) if the primary
+    call fails and GEMINI_API_KEY is configured.
+    """
+    client, model, is_local = _ai_client()
+    kwargs = {} if is_local else {"response_format": {"type": "json_object"}}
+    try:
+        response = await client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            **kwargs,
+        )
+        return response.choices[0].message.content
+    except Exception:
+        if not settings.GEMINI_API_KEY:
+            raise
+        gemini = AsyncOpenAI(
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+            api_key=settings.GEMINI_API_KEY,
+        )
+        response = await gemini.chat.completions.create(
+            model=settings.GEMINI_MODEL,
+            messages=messages,
+            temperature=temperature,
+            response_format={"type": "json_object"},
+        )
+        return response.choices[0].message.content
+
 STRIPE_SCENARIOS = [
     "A customer's payment fails due to insufficient funds. Retries also fail.",
     "A new customer completes their first subscription purchase.",
@@ -188,20 +220,15 @@ Event types to use: {event_types}
 Use realistic IDs. Timestamps within a 2-minute window.
 """
 
-    client, model, is_local = _ai_client()
-    kwargs = {} if is_local else {"response_format": {"type": "json_object"}}
-
-    response = await client.chat.completions.create(
-        model=model,
+    text = await ai_chat(
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
         ],
         temperature=0.9,
-        **kwargs,
     )
 
-    data = _parse_json(response.choices[0].message.content)
+    data = _parse_json(text)
     if isinstance(data, list):
         return data
     return data.get("events", [])
