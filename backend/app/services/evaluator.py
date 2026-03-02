@@ -4,6 +4,7 @@ Correlation & Prioritization Engine.
 Groups raw events into clusters (same root cause) and scores each cluster
 using a weighted formula: Score = Revenue*w1 + Frequency*w2 + UX*w3
 """
+import asyncio
 import uuid
 from datetime import datetime, timezone
 
@@ -678,10 +679,13 @@ async def evaluate_project(project_id: uuid.UUID, db: AsyncSession) -> dict:
     await db.flush()
 
     # 5. Rescore affected clusters
+    # Pass A (sequential): DB reads + scoring. SQLAlchemy async sessions don't
+    # support concurrent queries on the same session, so this stays sequential.
+    insight_work: list[tuple[Cluster, list[Event]]] = []
+
     for cluster in open_clusters:
         if cluster.id not in clusters_updated_ids:
             continue
-        # Load all events for this cluster to rescore
         result = await db.execute(
             select(Event)
             .join(ClusterEvent, ClusterEvent.event_id == Event.id)
@@ -689,7 +693,6 @@ async def evaluate_project(project_id: uuid.UUID, db: AsyncSession) -> dict:
         )
         cluster_events = result.scalars().all()
 
-        # Update affected_users
         user_ids: set[str] = set()
         for e in cluster_events:
             p = e.payload
@@ -705,14 +708,18 @@ async def evaluate_project(project_id: uuid.UUID, db: AsyncSession) -> dict:
 
         _rescore_cluster(cluster, config, cluster_events)
 
-        # Regenerate title/root_cause from the actual negative events so the
-        # description always matches the scores (e.g. a cluster seeded with a
-        # positive event but later filled with failures gets corrected here).
         if cluster.event_count >= 2:
-            await _regenerate_insight(cluster, cluster_events, cross_channel)
-            # Generate PM-quality synthesis: cross-source narrative + owner + action.
-            # Runs after _regenerate_insight so it has the final title/root_cause.
-            await _generate_pm_insight(cluster, cluster_events, config)
+            insight_work.append((cluster, list(cluster_events)))
+
+    # Pass B (parallel): LLM calls are independent across clusters — run concurrently.
+    # Within each cluster regenerate_insight runs before pm_insight (pm_insight
+    # uses the updated title/root_cause), so they stay sequential per cluster.
+    async def _run_insights(cluster: Cluster, events: list[Event]) -> None:
+        await _regenerate_insight(cluster, events, cross_channel)
+        await _generate_pm_insight(cluster, events, config)
+
+    if insight_work:
+        await asyncio.gather(*[_run_insights(c, evts) for c, evts in insight_work])
 
     await db.commit()
 

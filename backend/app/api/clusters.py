@@ -84,6 +84,23 @@ async def list_clusters(
     return ClustersPage(items=items, total=total, page=page, page_size=page_size)
 
 
+@router.get("/clusters/evaluating")
+async def is_evaluating(
+    deps=Depends(require_project_member),
+    db: AsyncSession = Depends(get_db),
+):
+    """Returns whether an evaluation job is currently pending or running for this project."""
+    project, _, _ = deps
+    result = await db.execute(
+        text(
+            "SELECT 1 FROM evaluation_jobs "
+            "WHERE project_id = :pid AND status IN ('pending', 'running') LIMIT 1"
+        ),
+        {"pid": str(project.id)},
+    )
+    return {"running": result.scalar() is not None}
+
+
 @router.get("/clusters/{cluster_id}", response_model=ClusterOut)
 async def get_cluster(
     cluster_id: uuid.UUID,
@@ -170,23 +187,6 @@ async def update_cluster_status(
     out = ClusterOut.model_validate(cluster)
     out.event_ids = [ce.event_id for ce in cluster.cluster_events]
     return out
-
-
-@router.get("/clusters/evaluating")
-async def is_evaluating(
-    deps=Depends(require_project_member),
-    db: AsyncSession = Depends(get_db),
-):
-    """Returns whether an evaluation job is currently pending or running for this project."""
-    project, _, _ = deps
-    result = await db.execute(
-        text(
-            "SELECT 1 FROM evaluation_jobs "
-            "WHERE project_id = :pid AND status IN ('pending', 'running') LIMIT 1"
-        ),
-        {"pid": str(project.id)},
-    )
-    return {"running": result.scalar() is not None}
 
 
 @router.post("/clusters/evaluate")
