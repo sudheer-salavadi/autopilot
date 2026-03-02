@@ -3,68 +3,99 @@ import { Button } from "@/components/ui/button";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
-const STEPS = [
-  {
-    label: "Events in, issues out",
-    body: "Stripe, Sentry, FullStory, and Zendesk signals are grouped by root cause — not by source or time window. One broken checkout becomes one issue, not three alerts.",
-  },
-  {
-    label: "A brief, not a log dump",
-    body: "Every issue surfaces root cause, recommended fix, revenue at risk, affected users, and cross-source correlation. Everything needed to act — nothing that isn't.",
-  },
-  {
-    label: "Built for your business",
-    body: "Weight revenue, frequency, and UX friction to match how your team prioritises. The ranking reflects your judgment, not ours.",
-  },
-];
-
 export default function LandingPage() {
   return (
-    <main className="min-h-screen flex flex-col items-center justify-center px-4 py-20 gap-16">
+    <main className="min-h-screen flex flex-col items-center justify-center px-4 py-20">
+      <div className="max-w-2xl w-full space-y-12">
 
-      {/* Hero */}
-      <div className="text-center space-y-5 max-w-xl">
-        <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-          AI-native incident intelligence
-        </p>
-        <h1 className="text-5xl font-bold tracking-tight">Autopilot</h1>
-        <p className="text-muted-foreground text-xl leading-relaxed">
-          Your team gets alerted by four tools. None of them talk to each other.
-          Autopilot connects the dots — automatically.
-        </p>
-        <div className="flex gap-3 justify-center pt-2">
-          <Button asChild size="lg">
-            <a href={`${API_URL}/api/auth/login`}>Get started</a>
-          </Button>
-          <Button asChild variant="outline" size="lg">
-            <Link href="/dashboard">Go to dashboard</Link>
-          </Button>
-        </div>
-      </div>
-
-      {/* Problem line */}
-      <div className="max-w-xl w-full text-center space-y-2">
-        <p className="text-sm text-muted-foreground leading-relaxed">
-          Legacy ops: alert&nbsp;→ Slack thread&nbsp;→ Jira ticket&nbsp;→ investigation&nbsp;→ too late.
-        </p>
-        <p className="text-sm font-medium">
-          AI-native: signal&nbsp;→ grouped&nbsp;→ scored&nbsp;→ actionable.
-        </p>
-      </div>
-
-      {/* Steps */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 max-w-3xl w-full">
-        {STEPS.map((s, i) => (
-          <div key={s.label} className="rounded-lg border bg-card p-5 space-y-2">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-              {String(i + 1).padStart(2, "0")}
-            </p>
-            <p className="font-semibold">{s.label}</p>
-            <p className="text-sm text-muted-foreground leading-relaxed">{s.body}</p>
+        {/* Hero */}
+        <div className="space-y-4">
+          <h1 className="text-4xl font-bold tracking-tight">Autopilot</h1>
+          <p className="text-lg text-muted-foreground leading-relaxed">
+            Connect Stripe, Sentry, FullStory, and Zendesk. Autopilot reads the raw
+            events from all four, groups them by root cause, scores them by business
+            impact, and tells you what to fix first.
+          </p>
+          <div className="flex gap-3 pt-1">
+            <Button asChild size="lg">
+              <a href={`${API_URL}/api/auth/login`}>Get started</a>
+            </Button>
+            <Button asChild variant="outline" size="lg">
+              <Link href="/dashboard">Go to dashboard</Link>
+            </Button>
           </div>
-        ))}
-      </div>
+        </div>
 
+        <hr />
+
+        {/* What it does */}
+        <div className="space-y-6">
+          <h2 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">What it does</h2>
+          <div className="space-y-5">
+            <div className="space-y-1">
+              <p className="font-semibold">Ingests events from your existing tools</p>
+              <p className="text-sm text-muted-foreground leading-relaxed">
+                Connect Stripe, Sentry, FullStory, and Zendesk via webhook or the simulate
+                toggle for instant demo data. No new SDK to install.
+              </p>
+            </div>
+            <div className="space-y-1">
+              <p className="font-semibold">Groups events by root cause, not by source</p>
+              <p className="text-sm text-muted-foreground leading-relaxed">
+                A Stripe payment failure, a Sentry exception, and a FullStory rage-click
+                from the same checkout flow become one issue — not three separate alerts.
+              </p>
+            </div>
+            <div className="space-y-1">
+              <p className="font-semibold">Scores every issue by business impact</p>
+              <p className="text-sm text-muted-foreground leading-relaxed">
+                Each issue gets a priority score based on revenue at risk, how often it
+                occurs, and UX friction signals. The highest-impact problem is always at
+                the top. You control the weights in Settings → Prioritization.
+              </p>
+            </div>
+            <div className="space-y-1">
+              <p className="font-semibold">Explains root cause and recommends a fix</p>
+              <p className="text-sm text-muted-foreground leading-relaxed">
+                Open any issue to see what's happening, which users are affected across
+                all your tools, what the likely cause is, and what to do about it.
+              </p>
+            </div>
+            <div className="space-y-1">
+              <p className="font-semibold">Files GitHub issues with one click</p>
+              <p className="text-sm text-muted-foreground leading-relaxed">
+                Connect your GitHub repo in Settings. Every issue can be sent directly
+                to your tracker — pre-written, with full context attached.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <hr />
+
+        {/* How to get started */}
+        <div className="space-y-6">
+          <h2 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">How to get started</h2>
+          <ol className="space-y-4">
+            {[
+              { n: "1", text: "Create a project." },
+              { n: "2", text: "Go to Integrations. Connect a source or turn on Simulate to generate realistic demo events immediately." },
+              { n: "3", text: "Go to Issues. Autopilot groups and scores incoming events automatically. Critical issues appear at the top." },
+              { n: "4", text: "Open an issue to see the root cause, affected users, revenue impact, and recommended fix." },
+              { n: "5", text: "Optionally: go to Settings → Prioritization to adjust how revenue, frequency, and UX signals are weighted." },
+              { n: "6", text: "Optionally: go to Settings → GitHub to connect a repo and file issues directly from Autopilot." },
+            ].map(({ n, text }) => (
+              <li key={n} className="flex gap-3 text-sm">
+                <span className="shrink-0 size-5 rounded-full border flex items-center justify-center text-xs font-medium tabular-nums">
+                  {n}
+                </span>
+                <span className="text-muted-foreground leading-relaxed pt-0.5">{text}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+
+      </div>
     </main>
   );
 }

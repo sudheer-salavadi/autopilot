@@ -6,6 +6,7 @@ import {
   IconCheck,
   IconChevronDown,
   IconFolder,
+  IconHelpCircle,
   IconLayersIntersect,
   IconLayoutDashboard,
   IconLogout,
@@ -157,6 +158,18 @@ export default function AppSidebar({
 
       <SidebarFooter>
         <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              asChild
+              isActive={pathname === "/how-it-works"}
+              className="border border-border/60 text-muted-foreground hover:text-foreground"
+            >
+              <Link href="/how-it-works">
+                <IconHelpCircle />
+                How it works
+              </Link>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
           <SidebarMenuItem>
             {user ? (
               <DropdownMenu>

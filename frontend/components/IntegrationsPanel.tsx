@@ -45,7 +45,7 @@ type CatalogEntry = {
 
 const CATALOG: { group: string; items: CatalogEntry[] }[] = [
   {
-    group: "Data Ingestion",
+    group: "Ingest",
     items: [
       {
         type: "stripe",

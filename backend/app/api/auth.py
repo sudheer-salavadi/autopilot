@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, Response
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel
 
 from app.api.deps import get_current_user
 from app.config import settings
@@ -42,6 +43,26 @@ async def callback(code: str, response: Response, db=Depends(get_db)):
 
 @router.get("/me")
 async def me(current_user: User = Depends(get_current_user)):
+    return {
+        "id": str(current_user.id),
+        "email": current_user.email,
+        "name": current_user.name,
+    }
+
+
+class UserUpdate(BaseModel):
+    name: str | None = None
+
+
+@router.put("/me")
+async def update_me(
+    body: UserUpdate,
+    current_user: User = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    if body.name is not None:
+        current_user.name = body.name.strip()
+    db.add(current_user)
     return {
         "id": str(current_user.id),
         "email": current_user.email,
