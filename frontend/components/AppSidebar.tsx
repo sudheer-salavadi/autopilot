@@ -210,13 +210,13 @@ export default function AppSidebar({
 
                   {/* How it works */}
                   <div className="space-y-5">
-                    <h2 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">How it works</h2>
+                    <h2 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">How Autopilot works</h2>
                     {[
                       { title: "Connect your existing tools", body: "Plug in Stripe, Sentry, FullStory, and Zendesk via webhook or flip the Simulate toggle for instant demo data. No new SDK to install." },
-                      { title: "Events are grouped by root cause", body: "A Stripe payment failure, a Sentry exception, and a FullStory rage-click from the same checkout flow become one issue — not three separate alerts." },
+                      { title: "Autopilot groups ingested events by root cause", body: "A Stripe payment failure, a Sentry exception, and a FullStory rage-click from the same checkout flow become one issue — not three separate alerts." },
                       { title: "Every issue is scored by business impact", body: "Each issue gets a priority score based on revenue at risk, how often it occurs, and UX friction signals. The highest-impact problem surfaces at the top." },
                       { title: "Root cause and recommended fix included", body: "Open any issue to see what broke, which users are affected across all your tools, what the likely cause is, and what to do about it." },
-                      { title: "File to GitHub with one click", body: "Connect your GitHub repo in Settings. Any issue can be sent directly to your tracker — pre-written, with full context attached." },
+                      { title: "Create a GitHub issue with one click", body: "Connect your GitHub repo in Settings. Any issue can be sent directly to your tracker — pre-written, with full context attached." },
                     ].map(({ title, body }) => (
                       <div key={title} className="space-y-1">
                         <p className="text-sm font-semibold">{title}</p>

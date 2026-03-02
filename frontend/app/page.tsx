@@ -11,6 +11,15 @@ export default function LandingPage() {
         {/* Hero */}
         <div className="space-y-4">
           <h1 className="text-4xl font-bold tracking-tight">Autopilot</h1>
+          <h2 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">The problem</h2>
+          <p className="text-lg leading-relaxed">
+            Product and engineering teams operate across four tools — Stripe for revenue,
+            Sentry for errors, FullStory for UX friction, Zendesk for support. Each fires
+            separate alerts. There is no shared view, no root cause, and no ranking.
+            The result: teams spend hours triaging noise and miss the issues that are
+            actually costing them money or users.
+          </p>
+          <h2 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">How Autopilot works</h2>
           <p className="text-lg text-muted-foreground leading-relaxed">
             Connect Stripe, Sentry, FullStory, and Zendesk. Autopilot reads the raw
             events from all four, groups them by root cause, scores them by business
