@@ -1233,9 +1233,9 @@ export default function ClustersFeed({
     setEvaluating(true);
     try {
       await api.post(`/api/projects/${slug}/clusters/evaluate`);
-      await refetch();
     } catch { /* silently ignore */ } finally {
       setEvaluating(false);
+      // Polling (autoEvaluating) takes over and refetches when the job finishes.
     }
   }
 
@@ -1244,10 +1244,19 @@ export default function ClustersFeed({
     setReclustering(true);
     try {
       await api.post(`/api/projects/${slug}/clusters/evaluate?reset=true`);
-      await refetch();
     } catch { /* silently ignore */ } finally {
       setReclustering(false);
     }
+  }
+
+  async function handleCancelEvaluation() {
+    if (!window.confirm("Stop the current evaluation?")) return;
+    try {
+      await api.delete(`/api/projects/${slug}/clusters/evaluate`);
+    } catch { /* silently ignore */ }
+    setEvaluating(false);
+    setReclustering(false);
+    setAutoEvaluating(false);
   }
 
 
@@ -1304,17 +1313,29 @@ export default function ClustersFeed({
 
           {view === "active" && (() => {
             const isRunning = evaluating || reclustering || autoEvaluating;
+            if (isRunning) {
+              return (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button size="icon" variant="outline" onClick={handleCancelEvaluation} className="shrink-0 size-8">
+                      <IconRefresh className="size-4 animate-spin" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Evaluation in progress — click to stop</TooltipContent>
+                </Tooltip>
+              );
+            }
             return (
               <DropdownMenu>
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <DropdownMenuTrigger asChild>
-                      <Button size="icon" variant="outline" disabled={isRunning} className="shrink-0 size-8">
-                        <IconRefresh className={`size-4 ${isRunning ? "animate-spin" : ""}`} />
+                      <Button size="icon" variant="outline" className="shrink-0 size-8">
+                        <IconRefresh className="size-4" />
                       </Button>
                     </DropdownMenuTrigger>
                   </TooltipTrigger>
-                  <TooltipContent>{isRunning ? "Evaluation in progress" : "Evaluate"}</TooltipContent>
+                  <TooltipContent>Evaluate</TooltipContent>
                 </Tooltip>
                 <DropdownMenuContent align="end">
                   <DropdownMenuLabel>Evaluate</DropdownMenuLabel>

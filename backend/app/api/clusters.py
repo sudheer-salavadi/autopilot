@@ -12,6 +12,7 @@ from app.models.cluster import Cluster, ClusterEvent, ClusterStatus
 from app.models.event import Event
 from app.schemas.cluster import ClusterEventOut, ClusterOut, ClustersPage
 from app.services.evaluator import evaluate_project
+from app.services.outbox import enqueue_evaluation
 
 
 class ClusterStatusUpdate(BaseModel):
@@ -195,11 +196,16 @@ async def trigger_evaluate(
     deps=Depends(require_project_owner),
     db: AsyncSession = Depends(get_db),
 ):
+    """Enqueues an evaluation job and returns immediately.
+
+    The background outbox worker runs the actual evaluation, so it survives
+    client disconnects (navigation away from the page).
+    """
     project, _, _ = deps
 
     if reset:
-        # Delete all clusters for this project — cluster_events cascade automatically.
-        # This frees every event to be re-clustered from scratch.
+        # Delete all clusters first so every event is unclustered and eligible
+        # for re-grouping when the background worker picks up the job.
         clusters_result = await db.execute(
             select(Cluster).where(Cluster.project_id == project.id)
         )
@@ -207,5 +213,23 @@ async def trigger_evaluate(
             await db.delete(cluster)
         await db.commit()
 
-    stats = await evaluate_project(project.id, db)
-    return stats
+    await enqueue_evaluation(project.id, db)
+    return {"status": "queued"}
+
+
+@router.delete("/clusters/evaluate")
+async def cancel_evaluate(
+    deps=Depends(require_project_owner),
+    db: AsyncSession = Depends(get_db),
+):
+    """Cancels any pending or running evaluation jobs for this project."""
+    project, _, _ = deps
+    await db.execute(
+        text(
+            "UPDATE evaluation_jobs SET status = 'failed', error = 'Cancelled by user' "
+            "WHERE project_id = :pid AND status IN ('pending', 'running')"
+        ),
+        {"pid": str(project.id)},
+    )
+    await db.commit()
+    return {"status": "cancelled"}
