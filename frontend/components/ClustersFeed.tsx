@@ -656,7 +656,7 @@ function ClusterDetail({
                 size="sm"
                 onClick={handleResolve}
                 disabled={resolving}
-                className="h-7 px-2 text-xs gap-1 text-muted-foreground"
+                className="h-7 px-2 text-xs gap-1"
               >
                 <IconCheck className="size-3" />
                 {resolving ? "Resolving…" : "Mark as resolved"}
@@ -669,7 +669,7 @@ function ClusterDetail({
                 size="sm"
                 onClick={handleUnresolve}
                 disabled={resolving}
-                className="h-7 px-2 text-xs gap-1 text-muted-foreground"
+                className="h-7 px-2 text-xs gap-1"
               >
                 {resolving ? "Updating…" : "↩ Mark as unresolved"}
               </Button>
