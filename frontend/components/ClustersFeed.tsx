@@ -37,7 +37,7 @@ import {
  */
 function formatRootCause(text: string): React.ReactNode {
   // Match in priority order: backtick > full URL > /path > currency > snake_case > dot.notation
-  const pattern = /(`[^`]+`|https?:\/\/[^\s,;]+|\/[a-zA-Z][a-zA-Z0-9/_-]+|\$[\d,]+(?:\.\d{1,2})?|\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b|\b[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]+)+\b)/g;
+  const pattern = /(`[^`]+`|https?:\/\/[^\s,;]+|\/[a-zA-Z][a-zA-Z0-9/_-]+|\$[\d,]+(?:\.\d{1,2})?|\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b|\b[a-z][a-z0-9]*(?:\.[a-z][a-z0-9_]+)+\b)/g;
 
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
@@ -580,11 +580,12 @@ function ClusterDetail({
   const rev = revenueLabel(cluster.revenue_score);
   const ux  = uxLabel(cluster.ux_score);
 
-  // Sum Stripe amounts (in cents) from the loaded event payloads.
-  // Covers payment_intent.amount, invoice.amount_due, charge.amount etc.
+  // Sum Stripe amounts (in cents) for at-risk event types only — mirrors the backend
+  // _rescore_cluster logic so this number matches the Revenue at Risk shown on the dashboard.
+  const AT_RISK_TYPES = ["failed", "refund", "past_due", "disputed", "unpaid", "void"];
   const stripeAmountCents = payloads
     ? payloads
-        .filter((e) => e.source === "stripe")
+        .filter((e) => e.source === "stripe" && AT_RISK_TYPES.some((t) => e.event_type.includes(t)))
         .reduce((sum, e) => {
           const obj = ((e.payload as Record<string, unknown>)?.data as Record<string, unknown>)
             ?.object as Record<string, unknown>;

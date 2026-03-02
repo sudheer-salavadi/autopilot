@@ -276,7 +276,7 @@ export default function ProjectDashboard({
             <div className="rounded-lg border bg-card overflow-hidden">
               <div className="flex items-center gap-2 px-4 py-3.5 border-b">
                 <IconChartBar className="size-4 text-muted-foreground" />
-                <h2 className="font-semibold">Events (24 h)</h2>
+                <h2 className="font-semibold flex gap-2 items-baseline">Events <span className="text-xs">24 Hrs</span></h2>
                 <span className="ml-auto text-sm text-muted-foreground tabular-nums">
                   {totalEvents24h.toLocaleString()}
                 </span>
@@ -298,7 +298,7 @@ export default function ProjectDashboard({
                           </span>
                           <span className="tabular-nums font-medium">{s.count.toLocaleString()}</span>
                         </div>
-                        <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                        <div className="h-1.5 rounded-full bg-foreground/80 overflow-hidden">
                           <div
                             className="h-full rounded-full bg-foreground/30"
                             style={{ width: `${pct}%` }}
