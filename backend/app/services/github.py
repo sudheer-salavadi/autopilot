@@ -31,14 +31,34 @@ def _headers(token: str) -> dict[str, str]:
     }
 
 
+def _normalize_pem(raw: str) -> str:
+    """Robustly normalize a PEM private key from env var storage.
+
+    Handles the common ways keys get mangled:
+    - Surrounding quotes added by shell or env tooling
+    - Literal \\n instead of real newlines (common in .env files / Docker)
+    - Windows line endings (\\r\\n)
+    - Missing newline after header / before footer
+    """
+    key = raw.strip().strip('"').strip("'").strip()
+    # Replace escaped newlines with real ones
+    key = key.replace("\\n", "\n").replace("\\r", "")
+    # Normalize Windows line endings
+    key = key.replace("\r\n", "\n").replace("\r", "\n")
+    # Ensure the header and footer are on their own lines
+    # (handles "-----BEGIN RSA PRIVATE KEY-----MIIE..." all on one line)
+    import re
+    key = re.sub(r"(-----BEGIN [^-]+-----)\s*", r"\1\n", key)
+    key = re.sub(r"\s*(-----END [^-]+-----)", r"\n\1", key)
+    return key.strip()
+
+
 def _generate_app_jwt() -> str:
     """Generate a short-lived RS256 JWT for app-level GitHub API calls."""
     from jose import jwt as jose_jwt
     from app.config import settings
 
-    # PEM keys stored in env files often have literal \n instead of real newlines.
-    # Unescape so python-jose can parse the key correctly.
-    private_key = settings.GITHUB_APP_PRIVATE_KEY.replace("\\n", "\n")
+    private_key = _normalize_pem(settings.GITHUB_APP_PRIVATE_KEY)
 
     now = int(time.time())
     return jose_jwt.encode(
