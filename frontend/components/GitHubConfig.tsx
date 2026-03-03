@@ -12,6 +12,7 @@ import {
   IconRefresh,
 } from "@tabler/icons-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
@@ -55,6 +56,10 @@ export default function GitHubConfig({
   const [reposLoading, setReposLoading] = useState(false);
   const [selectedRepo, setSelectedRepo] = useState(initialConfig.repo ?? "");
   const [saving, setSaving] = useState(false);
+  const [showManualId, setShowManualId] = useState(false);
+  const [manualId, setManualId] = useState("");
+  const [manualSaving, setManualSaving] = useState(false);
+  const [manualError, setManualError] = useState("");
   const [verifying, setVerifying] = useState(false);
   const [verifyResult, setVerifyResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [error, setError] = useState("");
@@ -96,6 +101,26 @@ export default function GitHubConfig({
   const installUrl = appSlug
     ? `https://github.com/apps/${appSlug}/installations/new?state=${slug}`
     : "#";
+
+  const handleManualInstall = async () => {
+    const id = parseInt(manualId.trim(), 10);
+    if (!id) { setManualError("Enter a valid numeric installation ID."); return; }
+    setManualSaving(true);
+    setManualError("");
+    try {
+      const updated = await api.put<GithubConfig>(
+        `/api/projects/${slug}/github-config`,
+        { installation_id: id }
+      );
+      setConfig(updated);
+      setShowManualId(false);
+      setManualId("");
+    } catch (err) {
+      setManualError(err instanceof Error ? err.message : "Failed to save.");
+    } finally {
+      setManualSaving(false);
+    }
+  };
 
   const handleSaveRepo = async () => {
     setError("");
@@ -244,6 +269,45 @@ export default function GitHubConfig({
           <p className="text-[11px] text-amber-600">
             NEXT_PUBLIC_GITHUB_APP_SLUG is not set. Configure the env var to enable this button.
           </p>
+        )}
+
+        {/* Manual installation ID fallback */}
+        {!config.is_installed && (
+          <div>
+            <button
+              type="button"
+              onClick={() => setShowManualId((v) => !v)}
+              className="text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground transition-colors"
+            >
+              {showManualId ? "Hide" : "Didn't get redirected back? Enter installation ID manually"}
+            </button>
+            {showManualId && (
+              <div className="mt-2 space-y-2">
+                <p className="text-[11px] text-muted-foreground leading-relaxed">
+                  Find your installation ID at{" "}
+                  <span className="font-mono">github.com/settings/installations</span>
+                  {" "}— it's the number in the URL of your installed app.
+                </p>
+                <div className="flex items-center gap-2">
+                  <Input
+                    value={manualId}
+                    onChange={(e) => { setManualId(e.target.value); setManualError(""); }}
+                    placeholder="e.g. 12345678"
+                    className="h-8 text-xs font-mono w-40"
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={handleManualInstall}
+                    disabled={manualSaving || !manualId.trim()}
+                  >
+                    {manualSaving ? "Saving…" : "Save"}
+                  </Button>
+                </div>
+                {manualError && <p className="text-[11px] text-destructive">{manualError}</p>}
+              </div>
+            )}
+          </div>
         )}
       </div>
 
