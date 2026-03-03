@@ -45,6 +45,27 @@ def _to_out(config: ProjectGithubConfig) -> GithubConfigOut:
     )
 
 
+@router.get("/github-config/debug-key")
+async def debug_github_key(deps=Depends(require_project_owner)):
+    """Diagnostic endpoint — shows key shape without exposing the key itself."""
+    from app.config import settings
+    raw = settings.GITHUB_APP_PRIVATE_KEY or ""
+    normalized = gh._normalize_pem(raw)
+    lines = normalized.splitlines()
+    return {
+        "app_id": settings.GITHUB_APP_ID,
+        "raw_length": len(raw),
+        "raw_first_20": raw[:20],
+        "raw_last_20": raw[-20:],
+        "normalized_length": len(normalized),
+        "normalized_line_count": len(lines),
+        "normalized_first_line": lines[0] if lines else "",
+        "normalized_last_line": lines[-1] if lines else "",
+        "has_begin_marker": "-----BEGIN" in normalized,
+        "has_end_marker": "-----END" in normalized,
+    }
+
+
 @router.get("/github-config", response_model=GithubConfigOut)
 async def get_github_config(
     deps=Depends(require_project_member),
