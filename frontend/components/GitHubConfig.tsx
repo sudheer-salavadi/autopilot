@@ -220,7 +220,7 @@ export default function GitHubConfig({
             className={`size-2 ${isConnected ? "text-emerald-500" : "text-muted-foreground/40"}`}
           />
           <span className="text-xs text-muted-foreground">
-            {isConnected ? `Connected to ${config.repo}` : config.is_installed ? "Installed — select repo" : "Not installed"}
+            {isConnected ? `Connected to ${config.repo}` : config.is_installed ? "Select repo" : "Not installed"}
           </span>
         </div>
       </div>
@@ -316,7 +316,6 @@ export default function GitHubConfig({
       {/* Repo selector — only shown when installed */}
       {config.is_installed && (
         <>
-          <Separator />
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <Label className="text-xs">Repository</Label>

@@ -32,22 +32,26 @@ def _headers(token: str) -> dict[str, str]:
 
 
 def _normalize_pem(raw: str) -> str:
-    """Robustly normalize a PEM private key from env var storage.
+    """Normalize a PEM private key from env var storage.
 
-    Handles the common ways keys get mangled:
-    - Surrounding quotes added by shell or env tooling
-    - Literal \\n instead of real newlines (common in .env files / Docker)
-    - Windows line endings (\\r\\n)
-    - Missing newline after header / before footer
+    Accepts two formats:
+    - Base64-encoded PEM (single line, no spaces) — preferred for env vars
+    - Raw PEM with real or escaped newlines
     """
+    import base64, re
     key = raw.strip().strip('"').strip("'").strip()
-    # Replace escaped newlines with real ones
+
+    # If it looks like base64 (no "-----" header, no whitespace), decode it
+    if "-----" not in key:
+        try:
+            key = base64.b64decode(key).decode("utf-8")
+        except Exception:
+            pass
+
+    # Replace escaped newlines and normalize line endings
     key = key.replace("\\n", "\n").replace("\\r", "")
-    # Normalize Windows line endings
     key = key.replace("\r\n", "\n").replace("\r", "\n")
-    # Ensure the header and footer are on their own lines
-    # (handles "-----BEGIN RSA PRIVATE KEY-----MIIE..." all on one line)
-    import re
+    # Ensure header and footer are on their own lines
     key = re.sub(r"(-----BEGIN [^-]+-----)\s*", r"\1\n", key)
     key = re.sub(r"\s*(-----END [^-]+-----)", r"\n\1", key)
     return key.strip()
