@@ -6,9 +6,9 @@ export default function HowItWorksPage() {
       <div className="space-y-3">
         <h1 className="text-2xl font-bold tracking-tight">How Autopilot works</h1>
         <p className="text-muted-foreground leading-relaxed">
-          Connect Stripe, Sentry, FullStory, and Zendesk. Autopilot reads the raw
-          events from all four, groups them by root cause, scores them by business
-          impact, and tells you what to fix first.
+          Connect your tools — Stripe, Sentry, FullStory, Zendesk, and more. Autopilot
+          reads raw events across your stack, groups them by root cause, scores them by
+          business impact, and tells you what to fix first.
         </p>
       </div>
 
@@ -21,8 +21,8 @@ export default function HowItWorksPage() {
           <div className="space-y-1">
             <p className="font-semibold">Ingests events from your existing tools</p>
             <p className="text-sm text-muted-foreground leading-relaxed">
-              Connect Stripe, Sentry, FullStory, and Zendesk via webhook or the simulate
-              toggle for instant demo data. No new SDK to install.
+              Connect your tools via webhook or turn on Simulate for instant demo data.
+              Works with any supported integration — no new SDK to install.
             </p>
           </div>
           <div className="space-y-1">
