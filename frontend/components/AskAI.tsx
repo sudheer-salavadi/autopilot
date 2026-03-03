@@ -56,7 +56,7 @@ export function AskAIButton() {
       <div className={`ml-auto p-px rounded-md ${GRADIENT}`}>
         <button
           onClick={() => setOpen((v) => !v)}
-          className="flex items-center gap-1.5 rounded-[5px] bg-background px-2.5 py-1 text-xs font-medium transition-colors hover:text-foreground"
+          className="flex items-center gap-1.5 rounded-[8px] bg-background px-2.5 py-1 text-xs font-medium transition-colors hover:text-foreground"
           aria-label="Ask AI"
         >
           <IconSparkles className="size-3.5" />
@@ -138,7 +138,7 @@ function AskAIPanel({ slug, onClose }: { slug: string; onClose: () => void }) {
         onClick={(e) => e.stopPropagation()}
       >
         {/* Inner panel */}
-        <div className="flex h-full w-full flex-col rounded-[11px] bg-background overflow-hidden">
+        <div className="flex h-full w-full flex-col rounded-[15px] bg-sidebar overflow-hidden">
 
           {/* Header */}
           <div className="flex items-center gap-2 border-b px-4 py-3 shrink-0">
