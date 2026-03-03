@@ -36,10 +36,14 @@ def _generate_app_jwt() -> str:
     from jose import jwt as jose_jwt
     from app.config import settings
 
+    # PEM keys stored in env files often have literal \n instead of real newlines.
+    # Unescape so python-jose can parse the key correctly.
+    private_key = settings.GITHUB_APP_PRIVATE_KEY.replace("\\n", "\n")
+
     now = int(time.time())
     return jose_jwt.encode(
         {"iat": now - 60, "exp": now + 600, "iss": settings.GITHUB_APP_ID},
-        settings.GITHUB_APP_PRIVATE_KEY,
+        private_key,
         algorithm="RS256",
     )
 

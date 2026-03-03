@@ -83,11 +83,13 @@ export default function GitHubConfig({
   const fetchRepos = async () => {
     if (!config.is_installed) return;
     setReposLoading(true);
+    setError("");
     try {
       const data = await api.get<Repo[]>(`/api/projects/${slug}/github-config/repos`);
       setRepos(data);
-    } catch {
+    } catch (err) {
       setRepos([]);
+      setError(err instanceof Error ? err.message : "Failed to load repositories.");
     } finally {
       setReposLoading(false);
     }
