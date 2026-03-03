@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import posthog from "posthog-js";
 import {
   IconBrandGithub,
@@ -50,6 +50,8 @@ export default function GitHubConfig({
   appSlug: string;
   onConfigSaved?: (config: GithubConfig) => void;
 }) {
+  const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
   const [config, setConfig] = useState(initialConfig);
   const [repos, setRepos] = useState<Repo[]>([]);
@@ -68,14 +70,14 @@ export default function GitHubConfig({
 
   const api = apiClient();
 
-  // Flash "GitHub App connected" when redirected back from callback
+  // Flash "GitHub App connected" when redirected back from callback, then clean up the URL
   useEffect(() => {
     if (searchParams.get("github") === "connected") {
       setConnectedFlash(true);
       setTimeout(() => setConnectedFlash(false), 5000);
-      posthog.capture("github_app_installed", {
-        project_slug: slug,
-      });
+      posthog.capture("github_app_installed", { project_slug: slug });
+      // Remove ?github=connected from URL so refresh doesn't re-trigger the flash
+      router.replace(pathname, { scroll: false });
     }
   }, [searchParams]); // eslint-disable-line react-hooks/exhaustive-deps
 
