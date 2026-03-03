@@ -27,10 +27,7 @@ export default function LandingPage() {
           </p>
           <div className="flex gap-3 pt-1">
             <Button asChild size="lg">
-              <a href={`${API_URL}/api/auth/login`}>Get started</a>
-            </Button>
-            <Button asChild variant="outline" size="lg">
-              <Link href="/dashboard">Go to dashboard</Link>
+              <a href={`${API_URL}/api/auth/login`}>Access Demo</a>
             </Button>
           </div>
         </div>
