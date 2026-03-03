@@ -1033,10 +1033,12 @@ export default function ClustersFeed({
   slug,
   initialData,
   openId,
+  githubRepo,
 }: {
   slug: string;
   initialData?: ClustersPage | null;
   openId?: string;
+  githubRepo?: string | null;
 }) {
   // ── view / filter / sort / page state ────────────────────────────────────
   const [view, setView]               = useState<"active" | "resolved">("active");
@@ -1204,8 +1206,8 @@ export default function ClustersFeed({
       {/* left column */}
       <div className="flex-1 min-w-0 space-y-3">
 
-        {/* ── Tab bar: Active / Resolved ─────────────────────────────── */}
-        <div className="flex gap-1 border-b">
+        {/* ── Tab bar: Open / Resolved / GitHub ──────────────────────── */}
+        <div className="flex items-end gap-1 border-b">
           {(["active", "resolved"] as const).map((v) => (
             <button
               key={v}
@@ -1219,6 +1221,18 @@ export default function ClustersFeed({
               {v === "active" ? "Open" : "Resolved"}
             </button>
           ))}
+          {githubRepo && (
+            <a
+              href={`https://github.com/${githubRepo}/issues`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="ml-auto mb-px flex items-center gap-1 px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground border-b-2 border-transparent"
+            >
+              <IconBrandGithub className="size-3.5" />
+              GitHub
+              <IconExternalLink className="size-3 opacity-60" />
+            </a>
+          )}
         </div>
 
         {/* ── Toolbar ────────────────────────────────────────────────── */}

@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 
 // ── Gradient shared ────────────────────────────────────────────────────────
 // Used on both the button wrapper and the panel wrapper.
-const GRADIENT = "bg-gradient-to-br from-violet-500 via-blue-500 to-cyan-400";
+const GRADIENT = "bg-gradient-to-br from-green-500 via-red-500 to-teal-400";
 
 // ── Types ─────────────────────────────────────────────────────────────────
 type Message = { role: "user" | "assistant"; content: string };
