@@ -185,7 +185,7 @@ def build_issue_body(
         f"UX Impact: {cluster.ux_score * 10:.1f}",
         "",
         "## Autopilot",
-        f"[View full cluster →]({frontend_url}/projects/{project_slug}/clusters/{cluster.id})",
+        f"[View full cluster →]({frontend_url}/projects/{project_slug}/issues?open={cluster.id})",
     ]
 
     return "\n".join(lines)
