@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import posthog from "posthog-js";
 import { IconCheck, IconCopy, IconRefresh } from "@tabler/icons-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -103,22 +102,9 @@ export default function IntegrationConfig({
       }
       setSecret("");
       onSaved(result);
-      posthog.capture("integration_enabled", {
-        integration_type: type,
-        ingestion_mode: isStripe ? mode : "webhook",
-        project_slug: project.slug,
-        is_update: !!integration,
-      });
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Failed to save";
       setError(errorMessage);
-      posthog.capture("integration_enable_failed", {
-        integration_type: type,
-        ingestion_mode: isStripe ? mode : "webhook",
-        project_slug: project.slug,
-        error_message: errorMessage,
-      });
-      posthog.captureException(err);
     } finally {
       setSubmitting(false);
     }
@@ -128,10 +114,6 @@ export default function IntegrationConfig({
     setSyncing(true);
     setSyncError("");
     setSyncResult(null);
-    posthog.capture("integration_mcp_sync_triggered", {
-      integration_type: type,
-      project_slug: project.slug,
-    });
     try {
       const result = await api.post<{ pulled: number }>(
         `/api/projects/${project.slug}/integrations/stripe/mcp-sync`,
@@ -140,7 +122,6 @@ export default function IntegrationConfig({
       setSyncResult(result);
     } catch (err) {
       setSyncError(err instanceof Error ? err.message : "Sync failed");
-      posthog.captureException(err);
     } finally {
       setSyncing(false);
     }

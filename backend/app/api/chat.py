@@ -148,8 +148,6 @@ async def project_chat(
         ],
         temperature=0.4,
         json_mode=False,
-        posthog_distinct_id="autopilot-chat",
-        posthog_properties={"project_id": str(project.id)},
     )
 
     return ChatResponse(response=response_text or "I couldn't generate a response. Please try again.")

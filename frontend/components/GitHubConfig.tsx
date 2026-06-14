@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
-import posthog from "posthog-js";
 import {
   IconBrandGithub,
   IconCheck,
@@ -75,7 +74,6 @@ export default function GitHubConfig({
     if (searchParams.get("github") === "connected") {
       setConnectedFlash(true);
       setTimeout(() => setConnectedFlash(false), 5000);
-      posthog.capture("github_app_installed", { project_slug: slug });
       // Remove ?github=connected from URL so refresh doesn't re-trigger the flash
       router.replace(pathname, { scroll: false });
     }
@@ -138,13 +136,8 @@ export default function GitHubConfig({
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
       onConfigSaved?.(updated);
-      posthog.capture("github_repo_saved", {
-        project_slug: slug,
-        repo: selectedRepo,
-      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save");
-      posthog.captureException(err);
     } finally {
       setSaving(false);
     }
@@ -152,10 +145,6 @@ export default function GitHubConfig({
 
   const handleAutopilotToggle = async (enabled: boolean) => {
     setConfig((c) => ({ ...c, autopilot_enabled: enabled }));
-    posthog.capture("github_autopilot_toggled", {
-      project_slug: slug,
-      autopilot_enabled: enabled,
-    });
     try {
       const updated = await api.put<GithubConfig>(
         `/api/projects/${slug}/github-config`,
@@ -188,17 +177,11 @@ export default function GitHubConfig({
         {}
       );
       setVerifyResult(result);
-      posthog.capture("github_connection_verified", {
-        project_slug: slug,
-        result_ok: result.ok,
-        result_message: result.message,
-      });
     } catch (err) {
       setVerifyResult({
         ok: false,
         message: err instanceof Error ? err.message : "Verification failed",
       });
-      posthog.captureException(err);
     } finally {
       setVerifying(false);
     }

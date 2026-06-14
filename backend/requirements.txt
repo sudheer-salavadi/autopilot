@@ -12,5 +12,4 @@ stripe==14.3.0
 httpx>=0.28.0
 python-multipart>=0.0.18
 openai>=1.54.0
-posthog[ai]>=3.5.0
 pgvector>=0.3.0

@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
-import posthog from "posthog-js";
 import {
   IconSend,
   IconSparkles,
@@ -98,10 +97,6 @@ function AskAIPanel({ slug, onClose }: { slug: string; onClose: () => void }) {
     setInput("");
     setMessages((m) => [...m, { role: "user", content: text }]);
     setLoading(true);
-    posthog.capture("ask_ai_query_sent", {
-      project_slug: slug,
-      query_length: text.length,
-    });
     try {
       const data = await apiClient().post<{ response: string }>(
         `/api/projects/${slug}/chat`,
@@ -113,7 +108,6 @@ function AskAIPanel({ slug, onClose }: { slug: string; onClose: () => void }) {
         ...m,
         { role: "assistant", content: "Something went wrong. Please try again." },
       ]);
-      posthog.captureException(err);
     } finally {
       setLoading(false);
     }

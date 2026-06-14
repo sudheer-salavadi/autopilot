@@ -27,6 +27,9 @@ out/
 # Docker
 *.log
 
+# Claude Code
+.claude/
+
 # IDE
 .idea/
 .vscode/
@@ -37,3 +40,5 @@ out/
 deployment-log.txt
 backend/app/services/Untitled-1.md
 /frontend/.claude
+frontend/data-responses.md
+frontend/posthog-setup-report.md

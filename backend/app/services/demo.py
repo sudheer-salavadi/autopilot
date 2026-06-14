@@ -17,30 +17,12 @@ from app.db.session import AsyncSessionLocal
 logger = logging.getLogger(__name__)
 
 
-# ── PostHog LLM observability ─────────────────────────────────────────────────
-
-_ph_singleton = None
-
-def _get_ph():
-    """Returns the PostHog singleton client, or None when POSTHOG_API_KEY is unset."""
-    global _ph_singleton
-    if _ph_singleton is None and settings.POSTHOG_API_KEY:
-        from posthog import Posthog
-        _ph_singleton = Posthog(settings.POSTHOG_API_KEY, host=settings.POSTHOG_HOST)
-    return _ph_singleton
-
-
 def _make_openai(base_url: str | None = None, api_key: str = "", timeout: int | None = None) -> AsyncOpenAI:
-    """Returns an AsyncOpenAI client, wrapped with PostHog when configured."""
-    ph = _get_ph()
     kwargs: dict = {"api_key": api_key}
     if base_url:
         kwargs["base_url"] = base_url
     if timeout is not None:
         kwargs["timeout"] = timeout
-    if ph:
-        from posthog.ai.openai import AsyncOpenAI as PhAsyncOpenAI
-        return PhAsyncOpenAI(posthog_client=ph, **kwargs)
     return AsyncOpenAI(**kwargs)
 
 
@@ -71,23 +53,16 @@ def _parse_json(text: str) -> dict:
 async def ai_chat(
     messages: list[dict],
     temperature: float = 0.3,
-    posthog_distinct_id: str = "autopilot-system",
-    posthog_properties: dict | None = None,
     json_mode: bool = True,
 ) -> str:
     """Call the primary AI model and return the content string.
 
     Falls back to Gemini (via its OpenAI-compatible endpoint) if the primary
     call fails and GEMINI_API_KEY is configured.
-    PostHog LLM observability is enabled automatically when POSTHOG_API_KEY is set.
     Set json_mode=False for plain-text responses (e.g. chat).
     """
     client, model, is_local = _ai_client()
     kwargs = {} if is_local or not json_mode else {"response_format": {"type": "json_object"}}
-    if _get_ph():
-        kwargs["posthog_distinct_id"] = posthog_distinct_id
-        if posthog_properties:
-            kwargs["posthog_properties"] = posthog_properties
     logger.info("AI call → model=%s", model)
     try:
         response = await client.chat.completions.create(
@@ -131,10 +106,6 @@ async def ai_chat(
     )
     logger.info("AI call → model=%s (Gemini fallback)", settings.GEMINI_MODEL)
     gemini_kwargs: dict = {} if not json_mode else {"response_format": {"type": "json_object"}}
-    if _get_ph():
-        gemini_kwargs["posthog_distinct_id"] = posthog_distinct_id
-        if posthog_properties:
-            gemini_kwargs["posthog_properties"] = posthog_properties
     try:
         response = await gemini.chat.completions.create(
             model=settings.GEMINI_MODEL,

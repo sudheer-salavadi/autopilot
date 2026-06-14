@@ -2,7 +2,6 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import posthog from "posthog-js";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -36,20 +35,10 @@ export default function NewProjectPage() {
     setSubmitting(true);
     try {
       const project = await createProject(name, slug);
-      posthog.capture("project_created", {
-        project_name: project.name,
-        project_slug: project.slug,
-      });
       router.push(`/projects/${project.slug}`);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Something went wrong";
       setError(errorMessage);
-      posthog.capture("project_create_failed", {
-        project_name: name,
-        project_slug: slug,
-        error_message: errorMessage,
-      });
-      posthog.captureException(err);
     } finally {
       setSubmitting(false);
     }
