@@ -9,7 +9,6 @@ Product and engineering teams operate across four tools — Stripe for revenue, 
 ## What it does
 
 - **Ingests events via webhook** from Stripe, Sentry, FullStory, and Zendesk — or connects any **MCP-compatible server** to pull events on a schedule (no public webhook URL required)
-- **Generates realistic demo events** via Simulate mode — no real data needed to get started
 - **Clusters events by root cause**, not by source — a Stripe payment failure, a Sentry exception, and a FullStory rage-click from the same checkout flow become one issue, not three alerts
 - **Scores every issue by business impact** — revenue at risk, frequency, and UX friction signals, weighted however you choose
 - **Explains root cause and recommends a fix** — see affected users, cross-source signal breakdown, and a suggested next step
@@ -124,13 +123,16 @@ To test webhooks locally, use a tunnel:
 cloudflared tunnel --url http://localhost:8000
 ```
 
-## Getting started (no real data needed)
+## Evaluating the product before connecting real integrations
+
+Autopilot includes a **Simulate** mode so you can walk through the full product experience — clustering, scoring, root cause analysis, GitHub filing, Ask AI — without configuring a single webhook. It's an onboarding shortcut, not a production feature: once your real integrations are sending events, turn Simulate off.
 
 1. Create a project
-2. Go to **Integrations** → enable **Simulate** on any source — Autopilot generates realistic demo events immediately using AI
-3. Go to **Issues** — events are clustered and scored automatically
+2. Go to **Integrations** → toggle **Simulate** on any source — AI-generated events start flowing immediately
+3. Go to **Issues** to see clustering and scoring in action
 4. Open any issue to see root cause, affected users, revenue impact, and recommended fix
 5. Adjust scoring weights in **Settings → Prioritization**
+6. When ready: configure a real integration and disable Simulate
 
 ## Project structure
 
