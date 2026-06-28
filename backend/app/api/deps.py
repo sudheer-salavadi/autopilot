@@ -2,16 +2,32 @@ from fastapi import Cookie, Depends, HTTPException, Path, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.db.session import get_db
 from app.models.project import MemberRole, Project, ProjectMember
 from app.models.user import User
 from app.services.auth import verify_session_token
+
+_DEV_WORKOS_ID = "dev_local_user"
+
+
+async def _get_or_create_dev_user(db: AsyncSession) -> User:
+    result = await db.execute(select(User).where(User.workos_user_id == _DEV_WORKOS_ID))
+    user = result.scalar_one_or_none()
+    if not user:
+        user = User(workos_user_id=_DEV_WORKOS_ID, email="dev@localhost", name="Dev User")
+        db.add(user)
+        await db.flush()
+    return user
 
 
 async def get_current_user(
     ap_session: str | None = Cookie(default=None),
     db: AsyncSession = Depends(get_db),
 ) -> User:
+    if settings.SKIP_AUTH:
+        return await _get_or_create_dev_user(db)
+
     if not ap_session:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
 
@@ -50,8 +66,19 @@ async def require_project_member(
         )
     )
     membership = result.scalar_one_or_none()
+
     if not membership:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not a project member")
+        if settings.SKIP_AUTH:
+            membership = ProjectMember(
+                project_id=project.id,
+                user_id=current_user.id,
+                role=MemberRole.owner,
+            )
+            db.add(membership)
+            await db.flush()
+        else:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not a project member")
+
     return project, current_user, membership
 
 

@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, _get_or_create_dev_user
 from app.config import settings
 from app.db.session import get_db
 from app.models.user import User
@@ -12,7 +13,27 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
 @router.get("/login")
-async def login():
+async def login(db: AsyncSession = Depends(get_db)):
+    if settings.SKIP_AUTH:
+        user = await _get_or_create_dev_user(db)
+        token = create_session_token(str(user.id))
+        redirect = RedirectResponse(url=f"{settings.FRONTEND_URL}/dashboard")
+        redirect.set_cookie(
+            key="ap_session",
+            value=token,
+            httponly=True,
+            samesite="lax",
+            secure=settings.HTTPS_COOKIES,
+            max_age=settings.JWT_EXPIRE_SECONDS,
+        )
+        return redirect
+
+    if not workos_client:
+        raise HTTPException(
+            status_code=503,
+            detail="Authentication not configured. Set WORKOS_API_KEY and WORKOS_CLIENT_ID, or set SKIP_AUTH=true for local development.",
+        )
+
     url = workos_client.user_management.get_authorization_url(
         redirect_uri=settings.NEXT_PUBLIC_WORKOS_REDIRECT_URI,
         provider="authkit",

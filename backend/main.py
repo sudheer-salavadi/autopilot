@@ -18,6 +18,11 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if settings.SKIP_AUTH:
+        logger.warning(
+            "SKIP_AUTH=true — authentication is DISABLED. "
+            "All requests run as the dev user. Never use this in production."
+        )
     async def background_outbox_worker():
         """Fast-path outbox poller: drains evaluation_jobs as quickly as possible.
 

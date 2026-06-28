@@ -30,8 +30,25 @@ Product and engineering teams operate across four tools — Stripe for revenue, 
 ### Prerequisites
 
 - Docker and Docker Compose
-- A [WorkOS](https://workos.com) account (free tier works — used for auth)
+- A [WorkOS](https://workos.com) account (free tier works — used for auth) **or** use `SKIP_AUTH=true` to skip auth entirely (see below)
 - An **OpenAI API key** — required for issue clustering, scoring, embeddings, and Ask AI. Without it the evaluator won't run. A Gemini key can be set as a fallback for transient failures (`GEMINI_API_KEY`), but does not replace OpenAI.
+
+### Quickest start — no WorkOS account needed
+
+Set `SKIP_AUTH=true` in your `.env` to bypass authentication completely. A "Dev User" is created automatically on first request — no WorkOS signup, no session keys to generate.
+
+```bash
+cp .env.example .env
+# Uncomment SKIP_AUTH=true in .env
+# Add your OPENAI_API_KEY
+docker compose up
+docker compose exec backend alembic upgrade head
+# Visit http://localhost:3000
+```
+
+> **Never use `SKIP_AUTH=true` in production.** All requests run as the same shared user with no access control.
+
+### Full setup with WorkOS auth
 
 ### 1. Configure environment
 

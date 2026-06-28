@@ -1,4 +1,9 @@
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Valid Fernet key (32 zero-bytes, base64url-encoded) — dev only, not cryptographically safe
+_DEV_ENCRYPTION_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+_DEV_SESSION_KEY = "dev-insecure-session-secret-do-not-use-in-production-00000"
 
 
 class Settings(BaseSettings):
@@ -7,13 +12,16 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str
 
-    # WorkOS
-    WORKOS_API_KEY: str
-    WORKOS_CLIENT_ID: str
+    # Skip WorkOS authentication — dev/evaluation only, never in production
+    SKIP_AUTH: bool = False
 
-    # Session & encryption
-    SESSION_SECRET_KEY: str
-    ENCRYPTION_KEY: str
+    # WorkOS — required when SKIP_AUTH=false
+    WORKOS_API_KEY: str = ""
+    WORKOS_CLIENT_ID: str = ""
+
+    # Session & encryption — required when SKIP_AUTH=false; insecure defaults for dev
+    SESSION_SECRET_KEY: str = _DEV_SESSION_KEY
+    ENCRYPTION_KEY: str = _DEV_ENCRYPTION_KEY
 
     # AI — OpenAI or LM Studio (OpenAI-compatible)
     OPENAI_API_KEY: str = ""
@@ -41,6 +49,31 @@ class Settings(BaseSettings):
 
     # Set True in production (HTTPS). Controls the Secure flag on ap_session cookie.
     HTTPS_COOKIES: bool = False
+
+    @model_validator(mode="after")
+    def check_auth_config(self) -> "Settings":
+        if not self.SKIP_AUTH:
+            if not self.WORKOS_API_KEY:
+                raise ValueError(
+                    "WORKOS_API_KEY is required. "
+                    "Set SKIP_AUTH=true to run without WorkOS (development only)."
+                )
+            if not self.WORKOS_CLIENT_ID:
+                raise ValueError(
+                    "WORKOS_CLIENT_ID is required. "
+                    "Set SKIP_AUTH=true to run without WorkOS (development only)."
+                )
+            if self.SESSION_SECRET_KEY == _DEV_SESSION_KEY:
+                raise ValueError(
+                    "SESSION_SECRET_KEY must be set to a secure value. "
+                    "Generate one with: openssl rand -hex 32"
+                )
+            if self.ENCRYPTION_KEY == _DEV_ENCRYPTION_KEY:
+                raise ValueError(
+                    "ENCRYPTION_KEY must be set to a secure value. "
+                    "Generate one with: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
+                )
+        return self
 
 
 settings = Settings()

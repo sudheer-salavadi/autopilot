@@ -8,7 +8,11 @@ from workos import WorkOSClient
 from app.config import settings
 from app.models.user import User
 
-workos_client = WorkOSClient(api_key=settings.WORKOS_API_KEY, client_id=settings.WORKOS_CLIENT_ID)
+workos_client = (
+    WorkOSClient(api_key=settings.WORKOS_API_KEY, client_id=settings.WORKOS_CLIENT_ID)
+    if settings.WORKOS_API_KEY
+    else None
+)
 
 
 def create_session_token(user_id: str) -> str:
