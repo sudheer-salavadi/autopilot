@@ -3,6 +3,15 @@ Correlation & Prioritization Engine.
 
 Groups raw events into clusters (same root cause) and scores each cluster
 using a weighted formula: Score = Revenue*w1 + Frequency*w2 + UX*w3
+
+Clustering uses a three-tier approach to minimise LLM API calls:
+  1. Batch-embed all unclustered events in one OpenAI call at the start of
+     evaluate_project (one API call regardless of event count).
+  2. pgvector `<=>` similarity against open cluster embeddings decides
+     assign vs create for the high-confidence and low-confidence cases.
+  3. LLM is called only for the ambiguous middle range (0.60–0.88 similarity)
+     where cross-source correlation judgment is genuinely needed, and for
+     cluster naming when a new cluster is created.
 """
 import asyncio
 import uuid
@@ -23,73 +32,59 @@ import app.services.sources as sources  # registers all plugins on import
 
 _EMBEDDING_MODEL = "text-embedding-3-small"
 _EMBEDDING_DIMS = 1536
-_REGRESSION_SIMILARITY_THRESHOLD = 0.92  # cosine similarity — tune as needed
+_REGRESSION_SIMILARITY_THRESHOLD = 0.92
+
+# Thresholds for the three-tier clustering decision:
+#   >= AUTO_ASSIGN  → pgvector match is confident enough, skip LLM
+#   <  AUTO_CREATE  → clearly unrelated to any open cluster, skip LLM
+#   between the two → LLM decides (cross-source ambiguity, ~15% of events)
+_AUTO_ASSIGN_THRESHOLD = 0.88
+_AUTO_CREATE_THRESHOLD = 0.60
 
 
 def _embedding_client() -> AsyncOpenAI | None:
-    """Always use OpenAI for embeddings (LM Studio may not support them).
-    Returns None if no API key is configured — embeddings are skipped gracefully.
-    """
     if settings.OPENAI_API_KEY:
         return AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
     return None
 
 
 async def _generate_embedding(text_input: str) -> list[float] | None:
-    """Generate a 1536-dim embedding for the given text. Returns None on any failure."""
+    """Generate a single embedding. Used for cluster title/root_cause only."""
     client = _embedding_client()
     if not client:
         return None
     try:
-        resp = await client.embeddings.create(
-            model=_EMBEDDING_MODEL, input=text_input
-        )
+        resp = await client.embeddings.create(model=_EMBEDDING_MODEL, input=text_input)
         return resp.data[0].embedding
     except Exception:
         return None
 
 
-def _cosine_sim(a: list[float], b: list[float]) -> float:
-    """Cosine similarity between two equal-length float vectors (no numpy needed)."""
-    dot = sum(x * y for x, y in zip(a, b))
-    mag_a = sum(x * x for x in a) ** 0.5
-    mag_b = sum(x * x for x in b) ** 0.5
-    if mag_a == 0.0 or mag_b == 0.0:
-        return 0.0
-    return dot / (mag_a * mag_b)
+async def _batch_embed_events(
+    events: list[Event], summaries: dict[uuid.UUID, str], db: AsyncSession
+) -> None:
+    """Embed all events that don't have an embedding yet in a single API call.
 
-
-def _candidate_clusters(
-    event_embedding: list[float] | None,
-    open_clusters: list[Cluster],
-    top_k: int = 5,
-) -> list[Cluster]:
-    """Return the top-K open clusters most semantically similar to the event.
-
-    Pre-filters the candidate list the LLM receives, reducing token usage and
-    keeping context focused on plausible matches. Falls back to the first top_k
-    clusters (by recency) when embeddings are unavailable.
+    OpenAI's /embeddings endpoint accepts up to 2048 inputs per request.
+    We store the result on event.embedding so subsequent evaluate_project
+    calls skip these events entirely — no redundant embedding work.
     """
-    if event_embedding is None or not open_clusters:
-        return open_clusters[:top_k]
+    client = _embedding_client()
+    if not client:
+        return
 
-    scored: list[tuple[float, Cluster]] = []
-    unembedded: list[Cluster] = []
+    to_embed = [e for e in events if e.embedding is None]
+    if not to_embed:
+        return
 
-    for c in open_clusters:
-        if c.embedding is not None:
-            sim = _cosine_sim(event_embedding, list(c.embedding))
-            scored.append((sim, c))
-        else:
-            unembedded.append(c)
-
-    if not scored:
-        # No clusters have embeddings yet — fall back to recency order
-        return open_clusters[:top_k]
-
-    scored.sort(key=lambda x: x[0], reverse=True)
-    candidates = [c for _, c in scored[:top_k]]
-    return candidates
+    texts = [summaries[e.id] for e in to_embed]
+    try:
+        resp = await client.embeddings.create(model=_EMBEDDING_MODEL, input=texts)
+        for event, emb_obj in zip(to_embed, resp.data):
+            event.embedding = emb_obj.embedding
+            db.add(event)
+    except Exception:
+        pass  # Graceful degradation — events without embeddings fall through to LLM path
 
 
 async def _detect_regression(
@@ -129,6 +124,44 @@ async def _detect_regression(
         return parent
     return None
 
+
+async def _find_best_cluster(
+    event: Event,
+    project_id: uuid.UUID,
+    db: AsyncSession,
+) -> tuple[Cluster | None, float]:
+    """Return the open cluster most similar to this event's embedding and its similarity.
+
+    Uses pgvector's <=> (cosine distance) operator directly in SQL — index-backed,
+    no Python loop over in-memory clusters needed. Returns (None, 0.0) when the
+    event has no embedding or no open clusters exist.
+    """
+    if event.embedding is None:
+        return None, 0.0
+
+    result = await db.execute(
+        text(
+            """
+            SELECT id,
+                   1 - (embedding <=> CAST(:vec AS vector)) AS similarity
+              FROM clusters
+             WHERE project_id = :project_id
+               AND status IN ('open', 'investigating')
+               AND embedding IS NOT NULL
+             ORDER BY embedding <=> CAST(:vec AS vector)
+             LIMIT 1
+            """
+        ),
+        {"vec": str(event.embedding), "project_id": str(project_id)},
+    )
+    row = result.fetchone()
+    if not row:
+        return None, 0.0
+
+    cluster = await db.get(Cluster, row.id)
+    return cluster, float(row.similarity)
+
+
 # Stripe positive-event constants — sourced from the Stripe plugin so there is
 # a single source of truth used by both the Python filter and the SQL filter.
 from app.services.sources.stripe import POSITIVE_SQL as _POSITIVE_STRIPE_SQL
@@ -150,17 +183,24 @@ def _summarize_event(event: Event, cross_channel: bool = True) -> str:
     return f"{event.source}:{event.event_type}"
 
 
-async def _assign_or_create(
+async def _llm_assign_or_create(
     event_summary: str,
-    open_clusters: list[Cluster],
+    candidate: Cluster | None,
     cross_channel: bool = True,
 ) -> dict:
-    """Ask the LLM to assign this event to an existing cluster or create a new one."""
-    cluster_summaries = [
-        f"- id:{str(c.id)} title:{c.title!r} root_cause:{c.root_cause!r}"
-        for c in open_clusters
-    ]
-    clusters_text = "\n".join(cluster_summaries) if cluster_summaries else "(none)"
+    """LLM tiebreaker for the ambiguous similarity range (0.60–0.88).
+
+    Only called when pgvector finds a plausible but not confident match.
+    Passes a single candidate cluster so the LLM has focused context rather
+    than a noisy list of all open clusters.
+    """
+    if candidate:
+        clusters_text = (
+            f"- id:{str(candidate.id)} title:{candidate.title!r} "
+            f"root_cause:{candidate.root_cause!r}"
+        )
+    else:
+        clusters_text = "(none)"
 
     if cross_channel:
         system_prompt = (
@@ -178,12 +218,12 @@ async def _assign_or_create(
             "Respond only with JSON."
         )
 
-    user_msg = f"""Open clusters:
+    user_msg = f"""Candidate cluster:
 {clusters_text}
 
 New event: {event_summary}
 
-If this event clearly matches an existing cluster by root cause, respond:
+If this event clearly matches the candidate cluster by root cause, respond:
 {{"action":"assign","cluster_id":"<uuid>"}}
 
 Otherwise respond:
@@ -191,14 +231,43 @@ Otherwise respond:
 
 Respond only with JSON."""
 
-    text = await ai_chat(
+    result_text = await ai_chat(
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_msg},
         ],
         temperature=0.1,
     )
-    return _parse_json(text)
+    return _parse_json(result_text)
+
+
+async def _llm_name_cluster(event_summary: str) -> dict:
+    """Ask the LLM to name a new cluster based solely on the triggering event.
+
+    Called only when pgvector is confident this event doesn't match any cluster
+    (similarity < _AUTO_CREATE_THRESHOLD), so we only need a title + root_cause.
+    """
+    result_text = await ai_chat(
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You name new issue clusters. Given an event description, "
+                    "produce a short title and one-sentence root cause. Respond only with JSON."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Event: {event_summary}\n\n"
+                    "Respond only with JSON:\n"
+                    '{"title":"<under 60 chars>","root_cause":"<one sentence>"}'
+                ),
+            },
+        ],
+        temperature=0.1,
+    )
+    return _parse_json(result_text)
 
 
 def _ux_signal(event: Event) -> float:
@@ -579,67 +648,77 @@ async def evaluate_project(project_id: uuid.UUID, db: AsyncSession) -> dict:
     if not unclustered:
         return {"clustered": 0, "clusters_created": 0, "clusters_updated": 0}
 
-    # 3. Load recent open clusters for LLM context
-    result = await db.execute(
-        select(Cluster)
-        .where(
-            Cluster.project_id == project_id,
-            Cluster.status == "open",
-        )
-        .options(selectinload(Cluster.cluster_events))
-        .order_by(Cluster.last_seen.desc())
-        .limit(15)
-    )
-    open_clusters = result.scalars().all()
-
     cross_channel: bool = config.cross_channel
+
+    # 3. Build summaries for all unclustered events, then batch-embed in one API call.
+    #    Events that already have an embedding (from a previous partial run) are skipped.
+    summaries: dict[uuid.UUID, str] = {
+        e.id: _summarize_event(e, cross_channel=cross_channel) for e in unclustered
+    }
+    await _batch_embed_events(unclustered, summaries, db)
+    await db.flush()  # Persist embeddings before the clustering loop reads them
 
     clusters_created = 0
     clusters_updated_ids: set[uuid.UUID] = set()
 
-    # 4. Process each unclustered event (Python safety-filter in case any
-    #    positive signal slips through the SQL filter due to unexpected payload shape)
+    # 4. Process each unclustered event using a three-tier decision:
+    #    - similarity >= AUTO_ASSIGN  → pgvector confident match, no LLM
+    #    - similarity <  AUTO_CREATE  → clearly new cluster, LLM names it only
+    #    - between the two            → LLM tiebreaker (cross-source ambiguity)
     for event in unclustered:
         if not _is_negative_signal(event):
             continue
 
-        summary = _summarize_event(event, cross_channel=cross_channel)
+        summary = summaries[event.id]
 
-        # Pre-filter candidate clusters using vector similarity so the LLM
-        # only sees the most relevant context (reduces tokens, improves accuracy).
-        event_embedding = await _generate_embedding(summary)
-        candidates = _candidate_clusters(event_embedding, open_clusters)
-
-        try:
-            decision = await _assign_or_create(
-                summary, candidates, cross_channel=cross_channel
-            )
-        except Exception:
-            # On LLM failure, create a new cluster rather than dropping the event
-            decision = {
-                "action": "create",
-                "title": f"{event.source}: {event.event_type}",
-                "root_cause": summary[:200],
-            }
+        best_cluster, similarity = await _find_best_cluster(event, project_id, db)
 
         target = None
+        create_kwargs: dict = {}
 
-        if decision.get("action") == "assign":
-            cluster_id_str = decision.get("cluster_id", "")
-            target = next(
-                (c for c in open_clusters if str(c.id) == cluster_id_str), None
-            )
+        if best_cluster and similarity >= _AUTO_ASSIGN_THRESHOLD:
+            # High confidence — assign directly without LLM
+            target = best_cluster
+
+        elif best_cluster and similarity >= _AUTO_CREATE_THRESHOLD:
+            # Ambiguous range — LLM decides, using only the single best candidate
+            try:
+                decision = await _llm_assign_or_create(
+                    summary, best_cluster, cross_channel=cross_channel
+                )
+            except Exception:
+                decision = {"action": "create", "title": f"{event.source}: {event.event_type}", "root_cause": summary[:200]}
+
+            if decision.get("action") == "assign":
+                cid = decision.get("cluster_id", "")
+                if cid == str(best_cluster.id):
+                    target = best_cluster
+                # If LLM returned an unexpected ID, fall through to create below
             if target is None:
-                # Cluster ID not found — fall through to create
-                decision["action"] = "create"
-                decision.setdefault("title", f"{event.source}: {event.event_type}")
-                decision.setdefault("root_cause", summary[:200])
+                create_kwargs = {
+                    "title": decision.get("title", f"{event.source}: {event.event_type}"),
+                    "root_cause": decision.get("root_cause", summary[:200]),
+                }
 
-        if decision.get("action") == "create" or target is None:
+        else:
+            # No plausible cluster — LLM names the new cluster only
+            try:
+                naming = await _llm_name_cluster(summary)
+                create_kwargs = {
+                    "title": naming.get("title", f"{event.source}: {event.event_type}"),
+                    "root_cause": naming.get("root_cause", summary[:200]),
+                }
+            except Exception:
+                create_kwargs = {
+                    "title": f"{event.source}: {event.event_type}",
+                    "root_cause": summary[:200],
+                }
+
+        if target is None:
             target = Cluster(
                 project_id=project_id,
-                title=decision.get("title", f"{event.source}: {event.event_type}")[:200],
-                root_cause=decision.get("root_cause", summary)[:500],
+                title=create_kwargs.get("title", f"{event.source}: {event.event_type}")[:200],
+                root_cause=create_kwargs.get("root_cause", summary)[:500],
                 first_seen=event.received_at,
                 last_seen=event.received_at,
                 event_count=0,
@@ -648,20 +727,15 @@ async def evaluate_project(project_id: uuid.UUID, db: AsyncSession) -> dict:
             db.add(target)
             await db.flush()
 
-            # Check if this is a regression of a resolved cluster.
-            # We need an embedding first — generate a provisional one from the
-            # LLM-assigned title/root_cause so we can run similarity immediately.
-            provisional_embedding = await _generate_embedding(
-                f"{target.title}. {target.root_cause}"
-            )
-            if provisional_embedding is not None:
-                target.embedding = provisional_embedding
+            # Regression detection — use the event's own embedding as provisional
+            # cluster embedding so we can query resolved clusters immediately.
+            if event.embedding is not None:
+                target.embedding = event.embedding
                 parent = await _detect_regression(target, db)
                 if parent is not None:
                     target.parent_cluster_id = parent.id
                     parent.regression_count += 1
 
-            open_clusters.append(target)
             clusters_created += 1
 
         # Upsert ClusterEvent
@@ -683,13 +757,14 @@ async def evaluate_project(project_id: uuid.UUID, db: AsyncSession) -> dict:
     # support concurrent queries on the same session, so this stays sequential.
     insight_work: list[tuple[Cluster, list[Event]]] = []
 
-    for cluster in open_clusters:
-        if cluster.id not in clusters_updated_ids:
+    for cluster_id in clusters_updated_ids:
+        cluster = await db.get(Cluster, cluster_id)
+        if not cluster:
             continue
         result = await db.execute(
             select(Event)
             .join(ClusterEvent, ClusterEvent.event_id == Event.id)
-            .where(ClusterEvent.cluster_id == cluster.id)
+            .where(ClusterEvent.cluster_id == cluster_id)
         )
         cluster_events = result.scalars().all()
 

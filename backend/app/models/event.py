@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -31,6 +32,8 @@ class Event(Base):
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
+    # Pre-computed embedding stored at evaluation time to avoid per-event API calls
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(1536), nullable=True)
 
     # Relationships
     project: Mapped["Project"] = relationship("Project", back_populates="events")  # noqa: F821
