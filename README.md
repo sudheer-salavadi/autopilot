@@ -2,6 +2,8 @@
 
 Your AI product manager — pulls signals from Stripe, Sentry, FullStory and Zendesk, groups them by root cause, and tells you what to fix first.
 
+![Autopilot screenshot](frontend/public/screenshot.png)
+
 ## The problem
 
 Product and engineering teams live across four tools — Stripe for revenue, Sentry for errors, FullStory for UX friction, Zendesk for support. Each fires its own alerts. Nobody connects them. The result: hours spent triaging noise while the real issues — the ones that are actually costing you money or users — stay buried across tabs.
