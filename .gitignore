@@ -29,6 +29,7 @@ out/
 
 # Claude Code
 .claude/
+memory/
 
 # IDE
 .idea/
