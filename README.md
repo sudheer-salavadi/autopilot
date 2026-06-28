@@ -1,10 +1,12 @@
 # Autopilot
 
-Cross-tool observability for product and engineering teams. Autopilot ingests events from Stripe, Sentry, FullStory, and Zendesk, groups them by root cause across all sources, scores them by business impact, and surfaces what to fix first.
+Your AI product manager — pulls signals from Stripe, Sentry, FullStory and Zendesk, groups them by root cause, and tells you what to fix first.
 
 ## The problem
 
-Product and engineering teams operate across four tools — Stripe for revenue, Sentry for errors, FullStory for UX friction, Zendesk for support. Each fires separate alerts. There is no shared view, no root cause, and no ranking. The result: teams spend hours triaging noise and miss the issues that are actually costing them money or users.
+Product and engineering teams live across four tools — Stripe for revenue, Sentry for errors, FullStory for UX friction, Zendesk for support. Each fires its own alerts. Nobody connects them. The result: hours spent triaging noise while the real issues — the ones that are actually costing you money or users — stay buried across tabs.
+
+Autopilot acts as a product manager that never sleeps: it reads every signal, links related ones across tools, ranks them by business impact, and hands you a clear "fix this next."
 
 ## What it does
 
