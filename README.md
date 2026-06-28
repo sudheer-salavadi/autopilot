@@ -22,7 +22,7 @@ Product and engineering teams operate across four tools — Stripe for revenue, 
 | Backend | FastAPI, SQLAlchemy 2.0, Alembic, PostgreSQL + pgvector |
 | Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS v4 |
 | Auth | WorkOS |
-| AI | OpenAI API — or LM Studio (local) with Gemini as fallback |
+| AI | OpenAI API (required), Gemini optional fallback |
 | Deployment | Docker Compose |
 
 ## Self-hosting
@@ -31,7 +31,7 @@ Product and engineering teams operate across four tools — Stripe for revenue, 
 
 - Docker and Docker Compose
 - A [WorkOS](https://workos.com) account (free tier works — used for auth)
-- An OpenAI API key **or** a local [LM Studio](https://lmstudio.ai) instance — required for Simulate mode and issue clustering/scoring. Without one, simulation generates no events and the evaluator won't run. Gemini can be set as a fallback via `GEMINI_API_KEY`.
+- An **OpenAI API key** — required for issue clustering, scoring, embeddings, and Ask AI. Without it the evaluator won't run. A Gemini key can be set as a fallback for transient failures (`GEMINI_API_KEY`), but does not replace OpenAI.
 
 ### 1. Configure environment
 
@@ -71,20 +71,22 @@ docker compose exec backend alembic upgrade head
 
 Visit `http://localhost:3000`
 
-## Using LM Studio instead of OpenAI
+## AI model configuration
 
-Set these in `.env` (takes priority over `OPENAI_API_KEY` when set):
+**OpenAI is required** for clustering, scoring, embeddings, and Ask AI — there is no substitute for these core features.
 
-```env
-LM_STUDIO_URL=http://host.docker.internal:1234/v1
-LM_STUDIO_MODEL=your-model-name
-```
-
-A Gemini fallback is also available:
+A Gemini key can be set as a fallback for when OpenAI calls fail (e.g. rate limits):
 
 ```env
 GEMINI_API_KEY=AIza...
 GEMINI_MODEL=gemini-2.0-flash   # optional, this is the default
+```
+
+LM Studio can be pointed at for demo event generation in Simulate mode only (it is not used by the evaluator or chat):
+
+```env
+LM_STUDIO_URL=http://host.docker.internal:1234/v1
+LM_STUDIO_MODEL=your-model-name
 ```
 
 ## MCP Server integration (optional)
