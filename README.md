@@ -118,7 +118,7 @@ Autopilot can file GitHub issues automatically when a problem cluster exceeds yo
    GITHUB_APP_WEBHOOK_SECRET=your_webhook_secret
    NEXT_PUBLIC_GITHUB_APP_SLUG=your-app-slug
    ```
-3. In the app: Settings → GitHub → Install GitHub App → select a repo
+3. In the app: go to **Integrations → GitHub** → Install GitHub App → select a repo
 
 To test webhooks locally, use a tunnel:
 ```bash
@@ -133,7 +133,7 @@ Autopilot includes a **Simulate** mode so you can walk through the full product 
 2. Go to **Integrations** → toggle **Simulate** on any source — AI-generated events start flowing immediately
 3. Go to **Issues** to see clustering and scoring in action
 4. Open any issue to see root cause, affected users, revenue impact, and recommended fix
-5. Adjust scoring weights in **Settings → Prioritization**
+5. Adjust scoring weights in **Settings → Severity**
 6. When ready: configure a real integration and disable Simulate
 
 ## Project structure
