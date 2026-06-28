@@ -5,11 +5,13 @@ import Image from "next/image";
 import {
   IconBrandGithub,
   IconCircleFilled,
+  IconServer,
 } from "@tabler/icons-react";
 import { cn } from "@/lib/utils";
 import { apiClient } from "@/lib/api";
 import IntegrationConfig from "@/components/IntegrationConfig";
 import IntegrationPreview from "@/components/IntegrationPreview";
+import McpServerConfig from "@/components/McpServerConfig";
 import GitHubConfig, { type GithubConfig } from "@/components/GitHubConfig";
 
 export interface Integration {
@@ -66,6 +68,11 @@ const CATALOG: { group: string; items: CatalogEntry[] }[] = [
         type: "zendesk",
         label: "Zendesk",
         icon: <Image src="/integrations-icns/zendesk.svg" alt="Zendesk" width={20} height={20} />,
+      },
+      {
+        type: "mcp_server",
+        label: "MCP Server",
+        icon: <IconServer className="size-5" />,
       },
     ],
   },
@@ -250,6 +257,18 @@ export default function IntegrationsPanel({
                     setGithubConnected(!!(cfg.is_installed && cfg.repo))
                   }
                 />
+              </div>
+            );
+          }
+          if (item.type === "mcp_server") {
+            return (
+              <div key="mcp_server" className={cn("contents", !isVisible && "hidden")}>
+                <McpServerConfig
+                  project={project}
+                  integration={configuredMap.get("mcp_server")}
+                  onSaved={handleSaved}
+                />
+                <IntegrationPreview slug={project.slug} source="mcp" isSimulating={false} />
               </div>
             );
           }

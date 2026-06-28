@@ -8,7 +8,8 @@ Product and engineering teams operate across four tools — Stripe for revenue, 
 
 ## What it does
 
-- **Ingests events via webhook** from Stripe, Sentry, FullStory, and Zendesk — or generates realistic demo events via Simulate mode (no real data needed to get started)
+- **Ingests events via webhook** from Stripe, Sentry, FullStory, and Zendesk — or connects any **MCP-compatible server** to pull events on a schedule (no public webhook URL required)
+- **Generates realistic demo events** via Simulate mode — no real data needed to get started
 - **Clusters events by root cause**, not by source — a Stripe payment failure, a Sentry exception, and a FullStory rage-click from the same checkout flow become one issue, not three alerts
 - **Scores every issue by business impact** — revenue at risk, frequency, and UX friction signals, weighted however you choose
 - **Explains root cause and recommends a fix** — see affected users, cross-source signal breakdown, and a suggested next step
@@ -31,7 +32,7 @@ Product and engineering teams operate across four tools — Stripe for revenue, 
 
 - Docker and Docker Compose
 - A [WorkOS](https://workos.com) account (free tier works — used for auth)
-- An OpenAI API key — or a local [LM Studio](https://lmstudio.ai) instance
+- An OpenAI API key **or** a local [LM Studio](https://lmstudio.ai) instance — required for Simulate mode and issue clustering/scoring. Without one, simulation generates no events and the evaluator won't run. Gemini can be set as a fallback via `GEMINI_API_KEY`.
 
 ### 1. Configure environment
 
@@ -80,7 +81,24 @@ LM_STUDIO_URL=http://host.docker.internal:1234/v1
 LM_STUDIO_MODEL=your-model-name
 ```
 
-A Gemini fallback is also available via `GEMINI_API_KEY` if the primary model fails.
+A Gemini fallback is also available:
+
+```env
+GEMINI_API_KEY=AIza...
+GEMINI_MODEL=gemini-2.0-flash   # optional, this is the default
+```
+
+## MCP Server integration (optional)
+
+Connect any MCP-compatible server (Stripe Agent Toolkit, Datadog, custom internal tools) and Autopilot will pull events from it on a schedule — no public webhook URL required, works fully locally.
+
+In the app: **Integrations → MCP Server**
+
+1. Enter the server URL (Streamable HTTP transport — hosted MCP servers work directly; local servers must be reachable from the Docker network via `host.docker.internal` or a shared network)
+2. Set authentication (None, Bearer token, or custom header)
+3. Click **Discover tools** to fetch the available tool list
+4. Select which tools to poll and set the sync interval (5 min / 15 min / 1 hour)
+5. Save — Autopilot pulls on schedule and deduplicates results automatically
 
 ## GitHub integration (optional)
 

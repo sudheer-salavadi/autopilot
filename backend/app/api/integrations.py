@@ -2,12 +2,13 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_project_member, require_project_owner
 from app.db.session import get_db
-from app.models.integration import Integration
+from app.models.integration import Integration, IntegrationType
 from app.schemas.integration import IntegrationCreate, IntegrationOut, IntegrationUpdate
 
 router = APIRouter(prefix="/api/projects/{slug}/integrations", tags=["integrations"])
@@ -70,6 +71,94 @@ async def update_integration(
 
     db.add(integration)
     return integration
+
+
+class _McpDiscoverBody(BaseModel):
+    server_url: str
+    auth_type: str = "none"
+    auth_value: str | None = None
+    auth_header_name: str | None = None
+
+
+@router.post("/mcp/discover")
+async def mcp_discover(
+    body: _McpDiscoverBody,
+    deps=Depends(require_project_member),
+    db: AsyncSession = Depends(get_db),
+):
+    """Connect to an MCP server and return its available tools."""
+    from app.services.mcp_client import discover_tools
+
+    try:
+        tools = await discover_tools(
+            server_url=body.server_url,
+            auth_type=body.auth_type,
+            auth_value=body.auth_value,
+            auth_header_name=body.auth_header_name,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Could not connect to MCP server: {exc}")
+
+    return {"tools": tools}
+
+
+@router.post("/{integration_id}/mcp-sync")
+async def mcp_server_sync(
+    integration_id: uuid.UUID,
+    deps=Depends(require_project_owner),
+    db: AsyncSession = Depends(get_db),
+):
+    """Manually trigger a sync for a generic MCP server integration."""
+    from app.services.mcp_client import pull_mcp_server
+    from app.services.outbox import enqueue_evaluation
+
+    project, _, __ = deps
+
+    result = await db.execute(
+        select(Integration).where(
+            Integration.id == integration_id,
+            Integration.project_id == project.id,
+            Integration.type == IntegrationType.mcp_server,
+            Integration.is_active == True,  # noqa: E712
+        )
+    )
+    integration = result.scalar_one_or_none()
+    if not integration:
+        raise HTTPException(status_code=404, detail="No active MCP server integration found")
+
+    cfg = integration.config or {}
+    server_url = cfg.get("server_url")
+    selected_tools = cfg.get("selected_tools") or []
+
+    if not server_url:
+        raise HTTPException(status_code=400, detail="server_url not configured")
+    if not selected_tools:
+        raise HTTPException(status_code=400, detail="No tools selected")
+
+    try:
+        pulled = await pull_mcp_server(
+            server_url=server_url,
+            selected_tools=selected_tools,
+            project_id=project.id,
+            integration_id=integration.id,
+            db=db,
+            auth_type=cfg.get("auth_type", "none"),
+            auth_value=integration.webhook_secret or None,
+            auth_header_name=cfg.get("auth_header_name"),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    updated_config = dict(cfg)
+    updated_config["last_mcp_sync"] = datetime.now(timezone.utc).isoformat()
+    integration.config = updated_config
+    db.add(integration)
+
+    if pulled > 0:
+        await enqueue_evaluation(project.id, db)
+
+    await db.commit()
+    return {"pulled": pulled}
 
 
 @router.post("/stripe/mcp-sync")

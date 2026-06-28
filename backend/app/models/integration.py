@@ -14,6 +14,7 @@ class IntegrationType(str, enum.Enum):
     sentry = "sentry"
     fullstory = "fullstory"
     zendesk = "zendesk"
+    mcp_server = "mcp_server"
 
 
 class Integration(Base, TimestampMixin):

@@ -68,12 +68,15 @@ async def lifespan(app: FastAPI):
             await asyncio.sleep(3)
 
     async def background_mcp_puller():
-        """Auto-sync Stripe MCP integrations every 5 minutes."""
-        from sqlalchemy import and_
-        from app.models.integration import Integration, IntegrationType
-        from app.services.stripe_pull import pull_stripe_events
-        from app.services.outbox import enqueue_evaluation
+        """Auto-sync Stripe MCP and generic MCP server integrations every 5 minutes."""
         from datetime import datetime, timezone
+
+        from sqlalchemy import and_, select
+
+        from app.models.integration import Integration, IntegrationType
+        from app.services.mcp_client import pull_mcp_server
+        from app.services.outbox import enqueue_evaluation
+        from app.services.stripe_pull import pull_stripe_events
 
         while True:
             await asyncio.sleep(300)  # wait first, then pull
@@ -82,35 +85,78 @@ async def lifespan(app: FastAPI):
                     result = await db.execute(
                         select(Integration).where(
                             and_(
-                                Integration.type == IntegrationType.stripe,
+                                Integration.type.in_(
+                                    [IntegrationType.stripe, IntegrationType.mcp_server]
+                                ),
                                 Integration.is_active == True,  # noqa: E712
                             )
                         )
                     )
-                    integrations = result.scalars().all()
+                    integrations_list = result.scalars().all()
                     any_pulled = False
-                    for integration in integrations:
-                        if (integration.config or {}).get("mode") != "mcp":
-                            continue
-                        if not integration.webhook_secret:
-                            continue
-                        try:
-                            pulled = await pull_stripe_events(
-                                api_key=integration.webhook_secret,
-                                project_id=integration.project_id,
-                                integration_id=integration.id,
-                                db=db,
-                            )
-                            if pulled > 0:
-                                await enqueue_evaluation(integration.project_id, db)
-                                any_pulled = True
-                            updated_config = dict(integration.config or {})
-                            updated_config["last_mcp_sync"] = datetime.now(timezone.utc).isoformat()
-                            integration.config = updated_config
-                            db.add(integration)
-                        except Exception:
-                            pass
-                    if any_pulled or integrations:
+                    now = datetime.now(timezone.utc)
+
+                    for integration in integrations_list:
+                        cfg = integration.config or {}
+
+                        if integration.type == IntegrationType.stripe:
+                            if cfg.get("mode") != "mcp":
+                                continue
+                            if not integration.webhook_secret:
+                                continue
+                            try:
+                                pulled = await pull_stripe_events(
+                                    api_key=integration.webhook_secret,
+                                    project_id=integration.project_id,
+                                    integration_id=integration.id,
+                                    db=db,
+                                )
+                                if pulled > 0:
+                                    await enqueue_evaluation(integration.project_id, db)
+                                    any_pulled = True
+                                updated_config = dict(cfg)
+                                updated_config["last_mcp_sync"] = now.isoformat()
+                                integration.config = updated_config
+                                db.add(integration)
+                            except Exception:
+                                pass
+
+                        elif integration.type == IntegrationType.mcp_server:
+                            server_url = cfg.get("server_url")
+                            selected_tools = cfg.get("selected_tools") or []
+                            if not server_url or not selected_tools:
+                                continue
+
+                            # Respect per-integration polling interval
+                            interval = cfg.get("polling_interval_seconds", 300)
+                            last_sync = cfg.get("last_mcp_sync")
+                            if last_sync:
+                                last_sync_dt = datetime.fromisoformat(last_sync)
+                                if (now - last_sync_dt).total_seconds() < interval:
+                                    continue
+
+                            try:
+                                pulled = await pull_mcp_server(
+                                    server_url=server_url,
+                                    selected_tools=selected_tools,
+                                    project_id=integration.project_id,
+                                    integration_id=integration.id,
+                                    db=db,
+                                    auth_type=cfg.get("auth_type", "none"),
+                                    auth_value=integration.webhook_secret or None,
+                                    auth_header_name=cfg.get("auth_header_name"),
+                                )
+                                if pulled > 0:
+                                    await enqueue_evaluation(integration.project_id, db)
+                                    any_pulled = True
+                                updated_config = dict(cfg)
+                                updated_config["last_mcp_sync"] = now.isoformat()
+                                integration.config = updated_config
+                                db.add(integration)
+                            except Exception:
+                                pass
+
+                    if any_pulled or integrations_list:
                         await db.commit()
             except Exception:
                 pass
