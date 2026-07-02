@@ -23,6 +23,11 @@ _PRIORITY_SCORES: dict[str, float] = {
 
 _RESOLVED_STATUSES: frozenset[str] = frozenset({"solved", "closed"})
 
+# Same statuses as a SQL IN () fragment for the evaluator's SQL prefilter —
+# must stay in sync with is_negative below or resolved tickets pile up
+# unclustered and starve the evaluation batch.
+RESOLVED_STATUS_SQL: str = ", ".join(f"'{s}'" for s in sorted(_RESOLVED_STATUSES))
+
 
 def _summarize(event: Event, cross_channel: bool = True) -> str:
     # Real Zendesk schema: event fields live in payload["detail"] (flat object)
@@ -67,10 +72,20 @@ def _is_negative(event: Event) -> bool:
     return status not in _RESOLVED_STATUSES
 
 
+def _identity(event: Event) -> str:
+    detail = event.payload.get("detail", {}) or {}
+    external_id = detail.get("external_id")
+    if external_id:
+        return str(external_id)
+    requester_id = detail.get("requester_id")
+    return f"zd:{requester_id}" if requester_id else ""
+
+
 register(SourcePlugin(
     name="zendesk",
     summarize=_summarize,
     ux_signal=_ux_signal,
     rich_line=_rich_line,
     is_negative=_is_negative,
+    identity=_identity,
 ))

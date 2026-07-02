@@ -11,9 +11,17 @@ Clustering uses a three-tier approach to minimise LLM API calls:
      event count.
   2. pgvector `<=>` similarity against open cluster embeddings decides
      assign vs create for the high-confidence and low-confidence cases.
+     Cluster embeddings are running centroids of their member events'
+     embeddings (online/leader clustering), so similarity always compares
+     event-summary text against event-summary text.
   3. LLM is called only for the ambiguous middle range (0.60–0.88 similarity)
-     where cross-source correlation judgment is genuinely needed, and for
-     cluster naming when a new cluster is created.
+     where cross-source correlation judgment is genuinely needed — it sees
+     the top-3 nearest clusters and picks one or creates — and for cluster
+     naming when a new cluster is created.
+
+Scoring: revenue at risk (capped linear), recency-decayed frequency (7-day
+half-life, capped linear), and worst-case UX severity (max, not mean) are
+combined as a user-weighted sum, unless a scoring webhook overrides it.
 """
 import asyncio
 import logging
@@ -49,6 +57,12 @@ _REGRESSION_SIMILARITY_THRESHOLD = 0.92
 #   between the two → LLM decides (cross-source ambiguity, ~15% of events)
 _AUTO_ASSIGN_THRESHOLD = 0.88
 _AUTO_CREATE_THRESHOLD = 0.60
+
+# Half-life for the frequency score's recency decay (7 days). Business/PM
+# signals arrive on a slower cadence than raw error events, so the half-life
+# is days rather than the hours an error tracker would use — recent volume
+# dominates, but a burst doesn't vanish before anyone has looked at it.
+_FREQUENCY_HALF_LIFE_HOURS = 7 * 24.0
 
 
 async def _generate_embedding(text_input: str) -> list[float] | None:
@@ -131,19 +145,26 @@ async def _detect_regression(
     return None
 
 
-async def _find_best_cluster(
+# How many nearest clusters the LLM tiebreaker gets to choose between. Top-1
+# retrieval hid the second-best candidate entirely, so two open clusters at
+# e.g. 0.75 and 0.74 similarity could never be disambiguated — the LLM either
+# assigned to the first or created a near-duplicate of the second.
+_CANDIDATE_LIMIT = 3
+
+
+async def _find_candidate_clusters(
     event: Event,
     project_id: uuid.UUID,
     db: AsyncSession,
-) -> tuple[Cluster | None, float]:
-    """Return the open cluster most similar to this event's embedding and its similarity.
+) -> list[tuple[Cluster, float]]:
+    """Return the open clusters most similar to this event's embedding, best first.
 
     Uses pgvector's <=> (cosine distance) operator directly in SQL — index-backed,
-    no Python loop over in-memory clusters needed. Returns (None, 0.0) when the
-    event has no embedding or no open clusters exist.
+    no Python loop over in-memory clusters needed. Returns [] when the event has
+    no embedding or no open clusters exist.
     """
     if event.embedding is None:
-        return None, 0.0
+        return []
 
     result = await db.execute(
         text(
@@ -155,23 +176,32 @@ async def _find_best_cluster(
                AND status IN ('open', 'investigating')
                AND embedding IS NOT NULL
              ORDER BY embedding <=> CAST(:vec AS vector)
-             LIMIT 1
+             LIMIT :limit
             """
         ),
-        {"vec": str(event.embedding), "project_id": str(project_id)},
+        {
+            "vec": str(event.embedding),
+            "project_id": str(project_id),
+            "limit": _CANDIDATE_LIMIT,
+        },
     )
-    row = result.fetchone()
-    if not row:
-        return None, 0.0
+    candidates: list[tuple[Cluster, float]] = []
+    for row in result.fetchall():
+        cluster = await db.get(Cluster, row.id)
+        if cluster:
+            candidates.append((cluster, float(row.similarity)))
+    return candidates
 
-    cluster = await db.get(Cluster, row.id)
-    return cluster, float(row.similarity)
 
-
-# Stripe positive-event constants — sourced from the Stripe plugin so there is
-# a single source of truth used by both the Python filter and the SQL filter.
+# Positive/resolved-event constants — sourced from the plugins so there is a
+# single source of truth used by both the Python filters and the SQL filters.
+# If these diverge, non-negative events pass the SQL prefilter, fail the
+# Python is_negative check, and sit unclustered forever — eventually filling
+# the fixed-size evaluation batch and stalling clustering for the project.
 from app.services.sources.stripe import POSITIVE_SQL as _POSITIVE_STRIPE_SQL
+from app.services.sources.stripe import POSITIVE_STATUS_SQL as _POSITIVE_STRIPE_STATUS_SQL
 from app.services.sources.stripe import POSITIVE_TYPES as _POSITIVE_STRIPE_TYPES
+from app.services.sources.zendesk import RESOLVED_STATUS_SQL as _RESOLVED_ZENDESK_STATUS_SQL
 
 
 def _summarize_event(event: Event, cross_channel: bool = True) -> str:
@@ -191,19 +221,22 @@ def _summarize_event(event: Event, cross_channel: bool = True) -> str:
 
 async def _llm_assign_or_create(
     event_summary: str,
-    candidate: Cluster | None,
+    candidates: list[tuple[Cluster, float]],
     cross_channel: bool = True,
 ) -> dict:
     """LLM tiebreaker for the ambiguous similarity range (0.60–0.88).
 
     Only called when pgvector finds a plausible but not confident match.
-    Passes a single candidate cluster so the LLM has focused context rather
-    than a noisy list of all open clusters.
+    Passes the top-k nearest candidate clusters (not every open cluster) so
+    the LLM can pick the right one when several are plausibly related, with
+    event_count/last_seen context to judge which cluster is actually live.
     """
-    if candidate:
-        clusters_text = (
-            f"- id:{str(candidate.id)} title:{candidate.title!r} "
-            f"root_cause:{candidate.root_cause!r}"
+    if candidates:
+        clusters_text = "\n".join(
+            f"- id:{str(c.id)} title:{c.title!r} root_cause:{c.root_cause!r} "
+            f"events:{c.event_count} last_seen:{c.last_seen.isoformat()} "
+            f"similarity:{sim:.2f}"
+            for c, sim in candidates
         )
     else:
         clusters_text = "(none)"
@@ -224,13 +257,13 @@ async def _llm_assign_or_create(
             "Respond only with JSON."
         )
 
-    user_msg = f"""Candidate cluster:
+    user_msg = f"""Candidate clusters (most similar first):
 {clusters_text}
 
 New event: {event_summary}
 
-If this event clearly matches the candidate cluster by root cause, respond:
-{{"action":"assign","cluster_id":"<uuid>"}}
+If this event clearly matches one of the candidate clusters by root cause, respond:
+{{"action":"assign","cluster_id":"<uuid of that cluster>"}}
 
 Otherwise respond:
 {{"action":"create","title":"<short title under 60 chars>","root_cause":"<one sentence>"}}
@@ -282,6 +315,22 @@ def _ux_signal(event: Event) -> float:
     return plugin.ux_signal(event) if plugin else 0.3
 
 
+# Placeholder identifier strings some sources emit instead of a real identity
+_JUNK_IDENTITIES = frozenset({"unknown", "null", "undefined", "none"})
+
+
+def _event_identity(event: Event) -> str:
+    """Return a stable user/customer identifier for this event, or "".
+
+    Dispatches to the registered SourcePlugin so each source's payload shape
+    lives in one place (previously this was special-cased inline in two spots,
+    which silently dropped Zendesk and scout events from affected_users).
+    """
+    plugin = sources.get(event.source)
+    uid = plugin.identity(event) if plugin else ""
+    return "" if uid.lower() in _JUNK_IDENTITIES else uid
+
+
 def _is_negative_signal(event: Event) -> bool:
     """Return True only for events that represent a problem or user friction.
 
@@ -316,29 +365,20 @@ async def _regenerate_insight(
     if not negative:
         return
 
-    # Group rich event lines by source
-    stripe_lines: list[str] = []
-    sentry_lines: list[str] = []
-    fullstory_lines: list[str] = []
+    # Group rich event lines by source. Callers pass events newest-first, so
+    # the 15-event context window is explicitly recency-biased — it describes
+    # the cluster's current state, not whichever rows the join returned first.
+    lines_by_source: dict[str, list[str]] = {}
     for e in negative[:15]:
-        line = _rich_event_line(e)
-        if e.source == "stripe":
-            stripe_lines.append(line)
-        elif e.source == "sentry":
-            sentry_lines.append(line)
-        else:
-            fullstory_lines.append(line)
+        lines_by_source.setdefault(e.source, []).append(_rich_event_line(e))
 
-    context_parts: list[str] = []
-    if stripe_lines:
-        context_parts.append("STRIPE events:\n" + "\n".join(stripe_lines))
-    if sentry_lines:
-        context_parts.append("SENTRY events:\n" + "\n".join(sentry_lines))
-    if fullstory_lines:
-        context_parts.append("FULLSTORY events:\n" + "\n".join(fullstory_lines))
+    context_parts = [
+        f"{source.upper()} events:\n" + "\n".join(lines)
+        for source, lines in lines_by_source.items()
+    ]
 
     events_text = "\n\n".join(context_parts)
-    sources_active = sum(1 for s in [stripe_lines, sentry_lines, fullstory_lines] if s)
+    sources_active = len(lines_by_source)
 
     cross_source_hint = ""
     if sources_active > 1:
@@ -359,6 +399,8 @@ Current title: {cluster.title!r}
 Current root cause: {cluster.root_cause!r}
 
 Generate an accurate title and one-sentence root cause based solely on the events above.
+- If the current title and root cause still accurately describe these events, return
+  them UNCHANGED — do not reword them just to produce something different.
 - Be specific: reference the exact page, element name, error class, or operation if present.
 - Identify the root cause (backend error, payment failure, broken UI interaction).
 - Do NOT use vague language like "an issue occurred" or "some problem".
@@ -389,12 +431,17 @@ Respond only with JSON:
     except Exception:
         pass  # Keep existing title/root_cause on LLM failure
 
-    # Generate embedding from the (possibly updated) title + root_cause.
-    # This runs regardless of whether the LLM call above succeeded, so clusters
-    # that kept their existing title still get an embedding on first pass.
-    embedding = await _generate_embedding(f"{cluster.title}. {cluster.root_cause}")
-    if embedding is not None:
-        cluster.embedding = embedding
+    # The cluster embedding is a running centroid of its member events'
+    # embeddings (maintained in evaluate_project) so event↔cluster similarity
+    # compares like with like. It is deliberately NOT rebuilt from the
+    # regenerated title here — that would swap the embedding into a different
+    # text style (LLM prose vs structured event summaries) and make it drift
+    # every time the title was reworded. Only backfill from the title when no
+    # centroid exists at all (event embeddings unavailable at creation time).
+    if cluster.embedding is None:
+        embedding = await _generate_embedding(f"{cluster.title}. {cluster.root_cause}")
+        if embedding is not None:
+            cluster.embedding = embedding
 
 
 async def _generate_pm_insight(
@@ -408,7 +455,6 @@ async def _generate_pm_insight(
     are already accurate. Non-blocking — silently skips on any LLM failure.
     """
     from collections import Counter
-    from app.services.sources.stripe import POSITIVE_TYPES as _POSITIVE_STRIPE_TYPES
 
     negative = [e for e in events if _is_negative_signal(e)]
     if not negative:
@@ -469,25 +515,30 @@ async def _generate_pm_insight(
         p_str = f" — {top_p[0][0]} priority" if top_p else ""
         source_lines.append(f"- Zendesk: {source_counts['zendesk']} tickets{p_str}")
 
-    # Cross-source identity overlap
+    if source_counts.get("scout"):
+        severities = [
+            (e.payload or {}).get("severity", "medium")
+            for e in negative if e.source == "scout"
+        ]
+        rank = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+        top_sev = max(severities, key=lambda s: rank.get(s, 1))
+        source_lines.append(
+            f"- Scout: {source_counts['scout']} proactive finding(s) — "
+            f"{top_sev} severity (LLM-assessed, uncorroborated by other signals "
+            f"unless listed above)"
+        )
+
+    # Any other/unknown sources — count them so no signal is silently omitted
+    for src, count in sorted(source_counts.items()):
+        if src not in ("stripe", "sentry", "fullstory", "zendesk", "scout"):
+            source_lines.append(f"- {src}: {count} events")
+
+    # Cross-source identity overlap — identities come from each source plugin
     identity_sources: dict[str, set[str]] = {}
     for e in negative:
-        p = e.payload
-        uid = ""
-        if e.source == "stripe":
-            uid = str(p.get("data", {}).get("object", {}).get("customer") or
-                      p.get("data", {}).get("object", {}).get("metadata", {}).get("email") or "")
-        elif e.source == "sentry":
-            uid = str(p.get("data", {}).get("event", {}).get("user", {}).get("email") or "")
-        elif e.source == "fullstory":
-            uid = str(p.get("data", {}).get("user_email") or p.get("data", {}).get("user_id") or "")
-        elif e.source == "zendesk":
-            uid = str((p.get("detail", {}) or {}).get("external_id") or
-                      (p.get("detail", {}) or {}).get("requester_id") or "")
-        if uid and uid not in ("unknown", "null", "undefined"):
-            if uid not in identity_sources:
-                identity_sources[uid] = set()
-            identity_sources[uid].add(e.source)
+        uid = _event_identity(e)
+        if uid:
+            identity_sources.setdefault(uid, set()).add(e.source)
     cross_source_users = [uid for uid, srcs in identity_sources.items() if len(srcs) > 1]
     cross_hint = (
         f"\n{len(cross_source_users)} user(s) appear in signals from multiple tools "
@@ -495,7 +546,6 @@ async def _generate_pm_insight(
         if cross_source_users else ""
     )
 
-    sources_active = [s for s in ["stripe", "sentry", "fullstory", "zendesk"] if source_counts.get(s)]
     user_str = f"{cluster.affected_users} user{'s' if cluster.affected_users != 1 else ''}"
     signal_block = "\n".join(source_lines)
 
@@ -552,9 +602,27 @@ async def _rescore_cluster(cluster: Cluster, config: ProjectScoringConfig, event
     revenue_usd = revenue_cents / 100
     ux_signals = [_ux_signal(e) for e in events]
 
+    # Frequency: exponential recency decay instead of the raw all-time count.
+    # A cluster that was noisy weeks ago but has gone quiet decays toward zero
+    # rather than holding a maxed frequency_score forever, so an active issue
+    # always outranks a historical one on this axis (same principle as
+    # Sentry's trends sort, which halves an event's weight on a fixed
+    # half-life). max_frequency_count keeps its meaning: this many *recent*
+    # events saturate the score.
+    now = datetime.now(timezone.utc)
+    decayed_count = 0.0
+    for e in events:
+        age_hours = max((now - e.received_at).total_seconds() / 3600.0, 0.0)
+        decayed_count += 0.5 ** (age_hours / _FREQUENCY_HALF_LIFE_HOURS)
+
     revenue_score = min(revenue_usd / max(config.max_revenue_usd, 1), 1.0)
-    frequency_score = min(cluster.event_count / max(config.max_frequency_count, 1), 1.0)
-    ux_score = sum(ux_signals) / len(ux_signals) if ux_signals else 0.0
+    frequency_score = min(decayed_count / max(config.max_frequency_count, 1), 1.0)
+    # UX severity: the worst signal in the cluster, not the mean. Averaging
+    # meant every corroborating low-severity event *diluted* the score — a
+    # rage-click cluster got less urgent as related payment events joined it.
+    # Incident tools set incident severity to the max of member alerts;
+    # volume is already the frequency axis's job.
+    ux_score = max(ux_signals) if ux_signals else 0.0
     priority_override: float | None = None
 
     if config.scoring_webhook_url:
@@ -563,6 +631,7 @@ async def _rescore_cluster(cluster: Cluster, config: ProjectScoringConfig, event
             cluster=cluster,
             revenue_usd=revenue_usd,
             ux_signals=ux_signals,
+            decayed_event_count=decayed_count,
         )
         if override:
             revenue_score = override.get("revenue_score", revenue_score)
@@ -590,6 +659,7 @@ async def _call_scoring_webhook(
     cluster: Cluster,
     revenue_usd: float,
     ux_signals: list[float],
+    decayed_event_count: float,
 ) -> dict | None:
     """POST raw signal data to a project's custom scoring plugin.
 
@@ -612,6 +682,7 @@ async def _call_scoring_webhook(
             "root_cause": cluster.root_cause,
             "revenue_usd": revenue_usd,
             "event_count": cluster.event_count,
+            "decayed_event_count": decayed_event_count,
             "affected_users": cluster.affected_users,
             "ux_signals": ux_signals,
             "max_revenue_usd": config.max_revenue_usd,
@@ -660,7 +731,7 @@ async def evaluate_project(project_id: uuid.UUID, db: AsyncSession) -> dict:
                     WHERE NOT (
                         (e.source = 'stripe'    AND (
                                                        e.event_type IN ({_POSITIVE_STRIPE_SQL})
-                                                       OR e.payload #>> '{{data,object,status}}' IN ('paid','succeeded','active','trialing','complete')
+                                                       OR e.payload #>> '{{data,object,status}}' IN ({_POSITIVE_STRIPE_STATUS_SQL})
                                                      ))
                      OR (e.source = 'sentry'    AND (
                                                        COALESCE(e.payload #>> '{{data,issue,level}}',
@@ -673,6 +744,8 @@ async def evaluate_project(project_id: uuid.UUID, db: AsyncSession) -> dict:
                                                        COALESCE(e.payload #>> '{{data,frustration_type}}', 'none') IN ('', 'none')
                                                        OR e.event_type IN ('session_start', 'session_end', 'session_url_changed')
                                                      ))
+                     OR (e.source = 'zendesk'   AND LOWER(COALESCE(e.payload #>> '{{detail,status}}', ''))
+                                                       IN ({_RESOLVED_ZENDESK_STATUS_SQL}))
                     )
                )
         """),
@@ -704,7 +777,7 @@ async def evaluate_project(project_id: uuid.UUID, db: AsyncSession) -> dict:
             text(
                 "NOT (events.source = 'stripe' AND "
                 "events.payload #>> '{data,object,status}' IN "
-                "('paid','succeeded','active','trialing','complete'))"
+                f"({_POSITIVE_STRIPE_STATUS_SQL}))"
             ),
             # Exclude Sentry non-actionable events (info/unknown level, resolved/ignored issues)
             text(
@@ -721,6 +794,14 @@ async def evaluate_project(project_id: uuid.UUID, db: AsyncSession) -> dict:
                 "  COALESCE(events.payload #>> '{data,frustration_type}', 'none') IN ('', 'none')"
                 "  OR events.event_type IN ('session_start', 'session_end', 'session_url_changed')"
                 "))"
+            ),
+            # Exclude solved/closed Zendesk tickets — these fail is_negative in
+            # Python; without this SQL twin they would re-enter (and eventually
+            # fill) the 50-event batch on every evaluation pass.
+            text(
+                "NOT (events.source = 'zendesk' AND "
+                "LOWER(COALESCE(events.payload #>> '{detail,status}', '')) IN "
+                f"({_RESOLVED_ZENDESK_STATUS_SQL}))"
             ),
         )
         .order_by(Event.received_at.asc())
@@ -749,13 +830,16 @@ async def evaluate_project(project_id: uuid.UUID, db: AsyncSession) -> dict:
     #    - similarity >= AUTO_ASSIGN  → pgvector confident match, no LLM
     #    - similarity <  AUTO_CREATE  → clearly new cluster, LLM names it only
     #    - between the two            → LLM tiebreaker (cross-source ambiguity)
+    processed = 0
     for event in unclustered:
         if not _is_negative_signal(event):
             continue
+        processed += 1
 
         summary = summaries[event.id]
 
-        best_cluster, similarity = await _find_best_cluster(event, project_id, db)
+        candidates = await _find_candidate_clusters(event, project_id, db)
+        best_cluster, similarity = candidates[0] if candidates else (None, 0.0)
 
         target = None
         create_kwargs: dict = {}
@@ -765,18 +849,21 @@ async def evaluate_project(project_id: uuid.UUID, db: AsyncSession) -> dict:
             target = best_cluster
 
         elif best_cluster and similarity >= _AUTO_CREATE_THRESHOLD:
-            # Ambiguous range — LLM decides, using only the single best candidate
+            # Ambiguous range — LLM decides between the plausible candidates
+            plausible = {
+                str(c.id): c for c, sim in candidates if sim >= _AUTO_CREATE_THRESHOLD
+            }
             try:
                 decision = await _llm_assign_or_create(
-                    summary, best_cluster, cross_channel=cross_channel
+                    summary,
+                    [(c, sim) for c, sim in candidates if sim >= _AUTO_CREATE_THRESHOLD],
+                    cross_channel=cross_channel,
                 )
             except Exception:
                 decision = {"action": "create", "title": f"{event.source}: {event.event_type}", "root_cause": summary[:200]}
 
             if decision.get("action") == "assign":
-                cid = decision.get("cluster_id", "")
-                if cid == str(best_cluster.id):
-                    target = best_cluster
+                target = plausible.get(decision.get("cluster_id", ""))
                 # If LLM returned an unexpected ID, fall through to create below
             if target is None:
                 create_kwargs = {
@@ -807,14 +894,19 @@ async def evaluate_project(project_id: uuid.UUID, db: AsyncSession) -> dict:
                 last_seen=event.received_at,
                 event_count=0,
                 affected_users=0,
+                # The event's own embedding seeds the cluster centroid. It must
+                # be part of the INSERT itself: assigning it after the flush
+                # left a window where the cluster row existed with embedding
+                # NULL, so a near-identical event later in the same batch
+                # couldn't find it and created a duplicate cluster.
+                embedding=event.embedding,
             )
             db.add(target)
             await db.flush()
 
-            # Regression detection — use the event's own embedding as provisional
-            # cluster embedding so we can query resolved clusters immediately.
+            # Regression detection — the event's own embedding (provisional
+            # cluster centroid) lets us query resolved clusters immediately.
             if event.embedding is not None:
-                target.embedding = event.embedding
                 parent = await _detect_regression(target, db)
                 if parent is not None:
                     target.parent_cluster_id = parent.id
@@ -822,6 +914,23 @@ async def evaluate_project(project_id: uuid.UUID, db: AsyncSession) -> dict:
 
             clusters_created += 1
             clusters_created_ids.add(target.id)
+
+        elif event.embedding is not None:
+            # Assigned to an existing cluster — fold this event into the
+            # cluster's embedding as a running centroid (standard online/
+            # leader clustering). Keeping the cluster embedding in the same
+            # text style as event embeddings means the similarity thresholds
+            # compare like with like; it previously flipped to an embedding
+            # of the LLM-written title, which is a different style of text
+            # and made post-regeneration similarities systematically lower.
+            if target.embedding is None:
+                target.embedding = event.embedding
+            else:
+                n = max(target.event_count, 1)
+                target.embedding = [
+                    (c * n + v) / (n + 1)
+                    for c, v in zip(target.embedding, event.embedding)
+                ]
 
         # Upsert ClusterEvent
         db.add(ClusterEvent(cluster_id=target.id, event_id=event.id))
@@ -835,6 +944,24 @@ async def evaluate_project(project_id: uuid.UUID, db: AsyncSession) -> dict:
 
         clusters_updated_ids.add(target.id)
 
+        # Persist this event's assignment and centroid update before the next
+        # event's pgvector query runs, so every event in the batch sees fully
+        # current cluster state (autoflush is not guaranteed for raw text()
+        # queries — this was observable as duplicate clusters within a batch).
+        await db.flush()
+
+    if processed == 0 and len(unclustered) >= 50:
+        # Every event in a full batch failed the Python is_negative filter but
+        # passed the SQL prefilter. Because skipped events stay unclustered,
+        # the same batch will be fetched again next pass — clustering for this
+        # project is stalled until the SQL prefilter is extended to match.
+        logger.warning(
+            "evaluate_project: full batch of %d unclustered events skipped by "
+            "is_negative filters for project=%s — SQL prefilter and source "
+            "plugins have diverged",
+            len(unclustered), project_id,
+        )
+
     await db.flush()
 
     # 5. Rescore affected clusters
@@ -847,24 +974,18 @@ async def evaluate_project(project_id: uuid.UUID, db: AsyncSession) -> dict:
         cluster = await db.get(Cluster, cluster_id)
         if not cluster:
             continue
+        # Newest first — _regenerate_insight's 15-event context window reads
+        # from the front of this list, so ordering here decides what the LLM
+        # sees. Scoring itself is order-independent.
         result = await db.execute(
             select(Event)
             .join(ClusterEvent, ClusterEvent.event_id == Event.id)
             .where(ClusterEvent.cluster_id == cluster_id)
+            .order_by(Event.received_at.desc())
         )
         cluster_events = result.scalars().all()
 
-        user_ids: set[str] = set()
-        for e in cluster_events:
-            p = e.payload
-            if e.source == "stripe":
-                uid = p.get("data", {}).get("object", {}).get("customer", "")
-            elif e.source == "sentry":
-                uid = p.get("data", {}).get("event", {}).get("user", {}).get("email", "")
-            else:
-                uid = p.get("data", {}).get("user_email", "")
-            if uid:
-                user_ids.add(uid)
+        user_ids = {uid for e in cluster_events if (uid := _event_identity(e))}
         cluster.affected_users = len(user_ids)
 
         await _rescore_cluster(cluster, config, cluster_events)
