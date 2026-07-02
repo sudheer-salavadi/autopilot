@@ -16,6 +16,7 @@ Clustering uses a three-tier approach to minimise LLM API calls:
      cluster naming when a new cluster is created.
 """
 import asyncio
+import logging
 import uuid
 from datetime import datetime, timezone
 
@@ -29,7 +30,16 @@ from app.models.cluster import Cluster, ClusterEvent
 from app.models.event import Event
 from app.models.scoring_config import ProjectScoringConfig
 from app.services.llm import ai_chat, _parse_json, embedding_client
+from app.services.webhook_dispatch import (
+    EVENT_CLUSTER_CREATED,
+    EVENT_CLUSTER_ISSUE_FILED,
+    EVENT_CLUSTER_SCORED,
+    cluster_payload,
+    emit_event,
+)
 import app.services.sources as sources  # registers all plugins on import
+
+logger = logging.getLogger(__name__)
 
 _REGRESSION_SIMILARITY_THRESHOLD = 0.92
 
@@ -522,8 +532,15 @@ Respond only with JSON: {{"insight": "<2-3 sentences>"}}"""
         pass  # Non-blocking — cluster works fine without pm_insight
 
 
-def _rescore_cluster(cluster: Cluster, config: ProjectScoringConfig, events: list[Event]) -> None:
-    """Recompute revenue/frequency/ux/priority scores on the cluster in-place."""
+async def _rescore_cluster(cluster: Cluster, config: ProjectScoringConfig, events: list[Event]) -> None:
+    """Recompute revenue/frequency/ux/priority scores on the cluster in-place.
+
+    If config.scoring_webhook_url is set, this is a pluggable stage: the raw
+    signal data is POSTed to that URL (HMAC-signed) and the returned scores
+    are used instead of the formula below. Any failure (timeout, bad response,
+    unreachable) falls back to the internal formula — a broken scoring plugin
+    degrades to default behavior, it never breaks clustering.
+    """
     # Revenue at risk: only count Stripe events that represent lost/at-risk money.
     # Succeeded payments are not a problem — failed, refunded, disputed, past_due are.
     AT_RISK_TYPES = ("failed", "refund", "past_due", "disputed", "unpaid", "void")
@@ -533,22 +550,92 @@ def _rescore_cluster(cluster: Cluster, config: ProjectScoringConfig, events: lis
             obj = e.payload.get("data", {}).get("object", {})
             revenue_cents += obj.get("amount", obj.get("amount_due", 0)) or 0
     revenue_usd = revenue_cents / 100
-    cluster.revenue_score = min(revenue_usd / max(config.max_revenue_usd, 1), 1.0)
-
-    # Frequency
-    cluster.frequency_score = min(cluster.event_count / max(config.max_frequency_count, 1), 1.0)
-
-    # UX: average of ux signals across all events in cluster
     ux_signals = [_ux_signal(e) for e in events]
-    cluster.ux_score = sum(ux_signals) / len(ux_signals) if ux_signals else 0.0
 
-    # Weighted priority score
+    revenue_score = min(revenue_usd / max(config.max_revenue_usd, 1), 1.0)
+    frequency_score = min(cluster.event_count / max(config.max_frequency_count, 1), 1.0)
+    ux_score = sum(ux_signals) / len(ux_signals) if ux_signals else 0.0
+    priority_override: float | None = None
+
+    if config.scoring_webhook_url:
+        override = await _call_scoring_webhook(
+            config,
+            cluster=cluster,
+            revenue_usd=revenue_usd,
+            ux_signals=ux_signals,
+        )
+        if override:
+            revenue_score = override.get("revenue_score", revenue_score)
+            frequency_score = override.get("frequency_score", frequency_score)
+            ux_score = override.get("ux_score", ux_score)
+            priority_override = override.get("priority_score")
+
+    cluster.revenue_score = revenue_score
+    cluster.frequency_score = frequency_score
+    cluster.ux_score = ux_score
     cluster.priority_score = (
-        cluster.revenue_score * config.weight_revenue
-        + cluster.frequency_score * config.weight_frequency
-        + cluster.ux_score * config.weight_ux
+        priority_override
+        if priority_override is not None
+        else (
+            revenue_score * config.weight_revenue
+            + frequency_score * config.weight_frequency
+            + ux_score * config.weight_ux
+        )
     )
     cluster.updated_at = datetime.now(timezone.utc)
+
+
+async def _call_scoring_webhook(
+    config: ProjectScoringConfig,
+    cluster: Cluster,
+    revenue_usd: float,
+    ux_signals: list[float],
+) -> dict | None:
+    """POST raw signal data to a project's custom scoring plugin.
+
+    Expects a JSON response with any of revenue_score/frequency_score/ux_score
+    (0-1, Autopilot still applies the project's weights) or priority_score
+    (0-1, a full override of the weighted combination). Returns None on any
+    failure so the caller falls back to the internal formula.
+    """
+    import hashlib
+    import hmac as hmac_lib
+    import json as json_lib
+
+    import httpx
+
+    body = json_lib.dumps(
+        {
+            "cluster_id": str(cluster.id),
+            "project_id": str(cluster.project_id),
+            "title": cluster.title,
+            "root_cause": cluster.root_cause,
+            "revenue_usd": revenue_usd,
+            "event_count": cluster.event_count,
+            "affected_users": cluster.affected_users,
+            "ux_signals": ux_signals,
+            "max_revenue_usd": config.max_revenue_usd,
+            "max_frequency_count": config.max_frequency_count,
+        },
+        default=str,
+    ).encode()
+
+    headers = {"Content-Type": "application/json"}
+    if config.scoring_webhook_secret:
+        signature = hmac_lib.new(config.scoring_webhook_secret.encode(), body, hashlib.sha256).hexdigest()
+        headers["X-Autopilot-Signature"] = f"sha256={signature}"
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(config.scoring_webhook_url, content=body, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+            if not isinstance(data, dict):
+                return None
+            return data
+    except Exception:
+        logger.warning("Scoring webhook failed for project=%s, falling back to internal formula", cluster.project_id)
+        return None
 
 
 async def evaluate_project(project_id: uuid.UUID, db: AsyncSession) -> dict:
@@ -655,6 +742,7 @@ async def evaluate_project(project_id: uuid.UUID, db: AsyncSession) -> dict:
     await db.flush()  # Persist embeddings before the clustering loop reads them
 
     clusters_created = 0
+    clusters_created_ids: set[uuid.UUID] = set()
     clusters_updated_ids: set[uuid.UUID] = set()
 
     # 4. Process each unclustered event using a three-tier decision:
@@ -733,6 +821,7 @@ async def evaluate_project(project_id: uuid.UUID, db: AsyncSession) -> dict:
                     parent.regression_count += 1
 
             clusters_created += 1
+            clusters_created_ids.add(target.id)
 
         # Upsert ClusterEvent
         db.add(ClusterEvent(cluster_id=target.id, event_id=event.id))
@@ -752,6 +841,7 @@ async def evaluate_project(project_id: uuid.UUID, db: AsyncSession) -> dict:
     # Pass A (sequential): DB reads + scoring. SQLAlchemy async sessions don't
     # support concurrent queries on the same session, so this stays sequential.
     insight_work: list[tuple[Cluster, list[Event]]] = []
+    scored_clusters: dict[uuid.UUID, Cluster] = {}
 
     for cluster_id in clusters_updated_ids:
         cluster = await db.get(Cluster, cluster_id)
@@ -777,7 +867,8 @@ async def evaluate_project(project_id: uuid.UUID, db: AsyncSession) -> dict:
                 user_ids.add(uid)
         cluster.affected_users = len(user_ids)
 
-        _rescore_cluster(cluster, config, cluster_events)
+        await _rescore_cluster(cluster, config, cluster_events)
+        scored_clusters[cluster_id] = cluster
 
         if cluster.event_count >= 2:
             insight_work.append((cluster, list(cluster_events)))
@@ -793,6 +884,14 @@ async def evaluate_project(project_id: uuid.UUID, db: AsyncSession) -> dict:
         await asyncio.gather(*[_run_insights(c, evts) for c, evts in insight_work])
 
     await db.commit()
+
+    # Outbound webhooks — fire after commit so payloads reflect final state.
+    # Fire-and-forget: never blocks or fails the evaluation pass.
+    for cluster_id, cluster in scored_clusters.items():
+        payload = cluster_payload(cluster)
+        if cluster_id in clusters_created_ids:
+            emit_event(project_id, EVENT_CLUSTER_CREATED, payload)
+        emit_event(project_id, EVENT_CLUSTER_SCORED, payload)
 
     # 6. Autopilot — auto-file GitHub issues for clusters that crossed the threshold.
     #    Runs after commit so scores are final. Failures are non-blocking.
@@ -1029,6 +1128,7 @@ async def _autopilot_github(
                         cluster.github_issue_number = parent.github_issue_number
                         cluster.github_issue_url = parent.github_issue_url
                         await db.commit()
+                        emit_event(project_id, EVENT_CLUSTER_ISSUE_FILED, cluster_payload(cluster))
                     except Exception:
                         pass
                     continue
@@ -1058,6 +1158,7 @@ async def _autopilot_github(
             if cluster.status == ClusterStatus.open:
                 cluster.status = ClusterStatus.investigating
             await db.commit()
+            emit_event(project_id, EVENT_CLUSTER_ISSUE_FILED, cluster_payload(cluster))
         except Exception:
             pass  # Non-blocking — next evaluate cycle will retry
 

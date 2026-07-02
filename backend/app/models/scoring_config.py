@@ -1,10 +1,11 @@
 import uuid
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+from app.services.crypto import EncryptedString
 
 
 class ProjectScoringConfig(Base):
@@ -23,6 +24,12 @@ class ProjectScoringConfig(Base):
     simulate_sentry: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     simulate_fullstory: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     simulate_zendesk: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    # Pluggable scoring — when set, the score stage POSTs raw signal data here
+    # (HMAC-signed) and uses the returned scores instead of the internal formula,
+    # falling back to it on any failure. See app.services.evaluator._rescore_cluster.
+    scoring_webhook_url: Mapped[str | None] = mapped_column(String, nullable=True)
+    scoring_webhook_secret: Mapped[str | None] = mapped_column(EncryptedString, nullable=True)
 
     # Relationships
     project: Mapped["Project"] = relationship("Project", back_populates="scoring_config")  # noqa: F821

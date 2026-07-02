@@ -29,15 +29,15 @@ plugs into whatever stack a team already has, not by forcing them onto ours.
 | **Fix agents** | Any coding agent can be triggered, not one owned agent | Done — provider registry in `services/coding_agents.py` + user-extensible `ProjectAgentConfig` (custom providers via `POST /agent-config`, not just the 3 built-ins). |
 | **LLM for the core pipeline** | BYO model for clustering/scoring/embeddings/Ask AI | Done — `services/llm.py` resolves `AI_BASE_URL` (any OpenAI-compatible endpoint: LM Studio, Ollama, vLLM, OpenRouter, ...) first, `OPENAI_API_KEY` as the zero-config default, Gemini as failure-only fallback. Embedding model + vector dimension configurable via `AI_EMBEDDING_MODEL`/`AI_EMBEDDING_DIMS`. |
 | **Proactive scouts** | Generic scheduled-probe interface, not just reactive webhooks | Not started. Vertically-integrated competitors get proactive detection (session-replay scanning, SDK/health checks) by owning the tracker; Autopilot's answer shouldn't be building a first-party tracker — it should be a generic "scout" that runs a scheduled query against *any* connected MCP source and feeds findings into the same clustering pipeline. |
-| **Open pipeline APIs** | Each stage (ingest/cluster/score/recommend/file/fix) independently addressable by third parties | Not started. Today it's one closed flow inside the FastAPI app. |
+| **Open pipeline APIs** | Each stage (ingest/cluster/score/recommend/file/fix) independently addressable by third parties | Done — outbound webhooks on every stage transition (`services/webhook_dispatch.py`) plus a pluggable scoring webhook that can replace the score stage's logic entirely. See below. |
 | **Self-hosting** | No forced cloud dependency | Done — Docker Compose, `SKIP_AUTH=true` for zero-config local runs. |
 
 ## Roadmap (priority order, as of 2026-07-02)
 
 1. ~~User-extensible coding-agent providers~~ — done
-2. ~~BYO LLM for the core pipeline~~ — done, see below
+2. ~~BYO LLM for the core pipeline~~ — done
 3. **Generic scout interface** ← next up. Scheduled queries against any MCP source, findings feed the existing `Cluster`/`Event` pipeline. Reuses the existing `background_mcp_puller` polling infra in `main.py`.
-4. **Open pipeline APIs / stage-level extensibility** — biggest scope, lowest current priority. Revisit once 3 is done.
+4. ~~Open pipeline APIs / stage-level extensibility~~ — done, see below. Jumped ahead of #3 by explicit request.
 
 ## Shipped: BYO LLM for the core pipeline
 
@@ -112,6 +112,66 @@ that gap and is cheap relative to items 2–4 above.
 **Files touched:** `models/agent_config.py`, a new alembic migration,
 `schemas/agent_config.py`, `api/agent_config.py`, `components/CodingAgentsConfig.tsx`.
 
+## Shipped: independently addressable pipeline stages
+
+**Why:** ingest → cluster → score → recommend → file issue → trigger fix was
+one closed flow inside the FastAPI app — a third party could only read final
+state via the REST API (polling), and nothing let them replace a stage's
+internal logic. Two concrete asks drove the scope: a Slack app that reads
+clusters (needs push, not polling) and a custom scoring plugin (needs a stage
+override, not just an event).
+
+**What changed:**
+- New `services/webhook_dispatch.py` is a generic outbound-event bus.
+  `emit_event(project_id, event_type, payload)` is fire-and-forget — it
+  schedules delivery on its own `asyncio.create_task` with its own DB
+  session, so a slow or dead third-party endpoint never blocks the pipeline
+  stage that called it. Six event types cover the stage transitions:
+  `cluster.created`, `cluster.scored`, `cluster.issue_filed`,
+  `cluster.fix_requested`, `cluster.fix_pr_linked`, `cluster.resolved`.
+- `ProjectWebhookSubscription` (new table) lets a project register any number
+  of `(url, event_types[], secret)` subscriptions via
+  `POST/PATCH/DELETE /webhook-subscriptions`, plus a `/test` endpoint for a
+  synchronous ping delivery. Deliveries are HMAC-SHA256 signed
+  (`X-Autopilot-Signature`) using the same scheme Autopilot's own inbound
+  webhook verification already uses (`services/webhooks.py`) — consistent
+  with, not a departure from, the existing pattern.
+- `emit_event` calls are wired into every stage's success path: cluster
+  creation/scoring in `evaluator.py`'s `evaluate_project`, issue filing in
+  both the manual endpoint and `_autopilot_github`, fix-trigger in
+  `agent_config.py`, PR-linking and resolution in `webhooks.py`, and manual
+  status changes in `clusters.py`.
+- `_rescore_cluster` (the score stage) is now genuinely pluggable: if
+  `ProjectScoringConfig.scoring_webhook_url` is set, raw signal data is
+  POSTed (HMAC-signed) and the returned `revenue_score`/`frequency_score`/
+  `ux_score` (still combined with the project's configured weights) or a
+  direct `priority_score` override is used instead of the internal formula.
+  Any failure falls back to the internal formula — same graceful-degradation
+  posture as the coding-agent and LLM work before it.
+- Both webhook secrets (`ProjectWebhookSubscription.secret`,
+  `ProjectScoringConfig.scoring_webhook_secret`) are `EncryptedString`
+  (Fernet, same as `Integration.webhook_secret`) — encrypted at rest,
+  decrypted transparently on read.
+
+**Known limitations, by design:**
+- No retry queue — a delivery that fails once is not retried. The
+  "last_delivery_status/error" fields on each subscription are the debugging
+  surface; there's no dead-letter handling.
+- Only the score stage has a plug-in override point. Recommend/file-issue/
+  trigger-fix could follow the same override pattern later, but weren't
+  built speculatively — the two concrete use cases (Slack notifications,
+  custom scoring) drove exactly two mechanisms, not a generic framework for
+  every stage.
+
+**Files touched:** `models/webhook_subscription.py` (new),
+`models/scoring_config.py`, `services/webhook_dispatch.py` (new),
+`services/evaluator.py`, `api/webhook_subscriptions.py` (new),
+`api/scoring_config.py`, `api/clusters.py`, `api/webhooks.py`,
+`api/github_config.py`, `api/agent_config.py`, `schemas/webhook_subscription.py`
+(new), `schemas/scoring_config.py`, `alembic/versions/0019_stage_extensibility.py`,
+`components/WebhooksConfig.tsx` (new), `components/PrioritizationConfig.tsx`,
+`components/IntegrationsPanel.tsx`, README.
+
 ## Ground rules for future sessions
 
 - When adding a new signal source or fix-agent integration, ask "does this
@@ -126,3 +186,10 @@ that gap and is cheap relative to items 2–4 above.
   problem. Read the code path, not just the README, before scoping a fix.
 - All model access goes through `services/llm.py` now — don't construct an
   `AsyncOpenAI` client anywhere else, or the next BYO-model gap creeps back in.
+- New pipeline stage transitions should call `emit_event` from
+  `services/webhook_dispatch.py` (add a new `EVENT_*` constant if needed)
+  rather than assuming third parties will poll for the new state.
+- Don't build a stage-override mechanism speculatively. The scoring webhook
+  exists because a concrete use case (custom scoring plugin) demanded it —
+  wait for the next concrete ask before adding one to recommend/file-issue/
+  trigger-fix.

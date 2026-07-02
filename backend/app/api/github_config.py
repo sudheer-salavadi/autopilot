@@ -14,6 +14,7 @@ from app.models.event import Event
 from app.models.github_config import ProjectGithubConfig
 from app.schemas.github_config import GithubConfigOut, GithubConfigUpdate
 from app.services import github as gh
+from app.services.webhook_dispatch import EVENT_CLUSTER_ISSUE_FILED, cluster_payload, emit_event
 
 router = APIRouter(prefix="/api/projects/{slug}", tags=["github"])
 
@@ -226,6 +227,7 @@ async def create_github_issue(
         cluster.status = ClusterStatus.investigating
 
     await db.commit()
+    emit_event(project.id, EVENT_CLUSTER_ISSUE_FILED, cluster_payload(cluster))
 
     return {
         "issue_number": issue["number"],

@@ -9,8 +9,15 @@ from app.models.event import Event
 from app.models.scoring_config import ProjectScoringConfig
 from app.schemas.scoring_config import ScoringConfigOut, ScoringConfigUpdate
 from app.services.evaluator import _rescore_cluster
+from app.services.webhook_dispatch import EVENT_CLUSTER_SCORED, cluster_payload, emit_event
 
 router = APIRouter(prefix="/api/projects/{slug}", tags=["scoring-config"])
+
+
+def _to_out(config: ProjectScoringConfig) -> ScoringConfigOut:
+    out = ScoringConfigOut.model_validate(config)
+    out.has_scoring_webhook_secret = bool(config.scoring_webhook_secret)
+    return out
 
 
 @router.get("/scoring-config", response_model=ScoringConfigOut)
@@ -29,7 +36,7 @@ async def get_scoring_config(
         db.add(config)
         await db.flush()
 
-    return ScoringConfigOut.model_validate(config)
+    return _to_out(config)
 
 
 @router.put("/scoring-config", response_model=ScoringConfigOut)
@@ -52,6 +59,14 @@ async def update_scoring_config(
     for field, value in body.model_dump(exclude_none=True).items():
         setattr(config, field, value)
 
+    # scoring_webhook_url/secret are nullable, so exclude_none above can't tell
+    # "field omitted" from "explicitly cleared" (schema normalizes "" to None).
+    # model_fields_set still distinguishes them regardless of the validated value.
+    if "scoring_webhook_url" in body.model_fields_set:
+        config.scoring_webhook_url = body.scoring_webhook_url
+    if "scoring_webhook_secret" in body.model_fields_set:
+        config.scoring_webhook_secret = body.scoring_webhook_secret
+
     await db.flush()
 
     # Rescore all clusters for this project
@@ -67,7 +82,9 @@ async def update_scoring_config(
             .where(ClusterEvent.cluster_id == cluster.id)
         )
         cluster_events = result.scalars().all()
-        _rescore_cluster(cluster, config, cluster_events)
+        await _rescore_cluster(cluster, config, cluster_events)
 
     await db.commit()
-    return ScoringConfigOut.model_validate(config)
+    for cluster in clusters:
+        emit_event(project.id, EVENT_CLUSTER_SCORED, cluster_payload(cluster))
+    return _to_out(config)

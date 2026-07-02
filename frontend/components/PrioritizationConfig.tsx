@@ -13,6 +13,8 @@ interface ScoringConfig {
   weight_ux: number;
   max_revenue_usd: number;
   max_frequency_count: number;
+  scoring_webhook_url: string | null;
+  has_scoring_webhook_secret: boolean;
 }
 
 export default function PrioritizationConfig({
@@ -34,6 +36,13 @@ export default function PrioritizationConfig({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+
+  const [scoringWebhookUrl, setScoringWebhookUrl] = useState(initialConfig.scoring_webhook_url ?? "");
+  const [scoringWebhookSecret, setScoringWebhookSecret] = useState("");
+  const [hasSecret, setHasSecret] = useState(initialConfig.has_scoring_webhook_secret);
+  const [webhookSaving, setWebhookSaving] = useState(false);
+  const [webhookSaved, setWebhookSaved] = useState(false);
+  const [webhookError, setWebhookError] = useState<string | null>(null);
 
   const total = revenue + frequency + ux;
   const isValid = total === 100 && revenue > 0 && frequency > 0 && ux > 0;
@@ -59,6 +68,45 @@ export default function PrioritizationConfig({
       setError(e instanceof Error ? e.message : "Failed to save");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleSaveScoringWebhook() {
+    setWebhookSaving(true);
+    setWebhookError(null);
+    setWebhookSaved(false);
+    try {
+      const body: Record<string, string> = { scoring_webhook_url: scoringWebhookUrl };
+      if (scoringWebhookSecret) body.scoring_webhook_secret = scoringWebhookSecret;
+      await api.put(`/api/projects/${slug}/scoring-config`, body);
+      if (scoringWebhookSecret) {
+        setHasSecret(true);
+        setScoringWebhookSecret("");
+      }
+      setWebhookSaved(true);
+      setTimeout(() => setWebhookSaved(false), 3000);
+    } catch (e) {
+      setWebhookError(e instanceof Error ? e.message : "Failed to save");
+    } finally {
+      setWebhookSaving(false);
+    }
+  }
+
+  async function handleClearScoringWebhook() {
+    setWebhookSaving(true);
+    setWebhookError(null);
+    try {
+      await api.put(`/api/projects/${slug}/scoring-config`, {
+        scoring_webhook_url: "",
+        scoring_webhook_secret: "",
+      });
+      setScoringWebhookUrl("");
+      setScoringWebhookSecret("");
+      setHasSecret(false);
+    } catch (e) {
+      setWebhookError(e instanceof Error ? e.message : "Failed to clear");
+    } finally {
+      setWebhookSaving(false);
     }
   }
 
@@ -161,13 +209,66 @@ export default function PrioritizationConfig({
       {error && <p className="text-sm text-destructive">{error}</p>}
     </div>
 
-      <div className="my-4 pt-10 h-2 border-t w-full flex justify-end items-center"> 
+      <div className="my-4 pt-10 h-2 border-t w-full flex justify-end items-center">
          <Button onClick={handleSave} disabled={!isValid || saving} className="w-fit">
         {saving ? "Saving…" : saved ? "Saved!" : "Save"}
       </Button>
       </div>
 
-     
+      {/* Card 3 — Pluggable scoring (custom scoring plugin) */}
+      <div className="rounded-lg border bg-card p-5 space-y-4 max-w-2xl">
+        <div className="space-y-1">
+          <h2 className="text-sm font-semibold">Custom Scoring Plugin</h2>
+          <p className="text-xs text-muted-foreground">
+            Optional. When set, Autopilot POSTs each cluster&apos;s raw signal data (HMAC-signed)
+            to this URL and uses the returned scores instead of the formula above — e.g. to
+            factor in ARR data Autopilot doesn&apos;t have. A response can include any of
+            <span className="font-mono"> revenue_score</span>,
+            <span className="font-mono"> frequency_score</span>,
+            <span className="font-mono"> ux_score</span> (0–1, still combined with the weights
+            above) or <span className="font-mono">priority_score</span> (0–1, a full override).
+            On failure or timeout, Autopilot falls back to the internal formula.
+          </p>
+        </div>
+
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <Label htmlFor="scoringWebhookUrl">Webhook URL</Label>
+            <Input
+              id="scoringWebhookUrl"
+              type="url"
+              placeholder="https://your-service.example.com/score"
+              value={scoringWebhookUrl}
+              onChange={(e) => setScoringWebhookUrl(e.target.value)}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="scoringWebhookSecret">
+              Signing secret {hasSecret && <span className="text-muted-foreground font-normal">(already set — leave blank to keep it)</span>}
+            </Label>
+            <Input
+              id="scoringWebhookSecret"
+              type="password"
+              placeholder={hasSecret ? "••••••••••••" : "optional — used to sign the X-Autopilot-Signature header"}
+              value={scoringWebhookSecret}
+              onChange={(e) => setScoringWebhookSecret(e.target.value)}
+            />
+          </div>
+        </div>
+
+        {webhookError && <p className="text-sm text-destructive">{webhookError}</p>}
+
+        <div className="flex items-center gap-2">
+          <Button onClick={handleSaveScoringWebhook} disabled={webhookSaving} className="w-fit">
+            {webhookSaving ? "Saving…" : webhookSaved ? "Saved!" : "Save"}
+          </Button>
+          {(scoringWebhookUrl || hasSecret) && (
+            <Button variant="ghost" onClick={handleClearScoringWebhook} disabled={webhookSaving} className="w-fit">
+              Clear
+            </Button>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

@@ -28,6 +28,7 @@ from app.schemas.agent_config import (
 )
 from app.services import github as gh
 from app.services.coding_agents import PROVIDERS
+from app.services.webhook_dispatch import EVENT_CLUSTER_FIX_REQUESTED, cluster_payload, emit_event
 
 router = APIRouter(prefix="/api/projects/{slug}", tags=["agents"])
 
@@ -242,6 +243,7 @@ async def trigger_agent_fix(
     cluster.fix_pr_state = None
 
     await db.commit()
+    emit_event(project.id, EVENT_CLUSTER_FIX_REQUESTED, cluster_payload(cluster))
 
     return {
         "fix_provider": cluster.fix_provider,
