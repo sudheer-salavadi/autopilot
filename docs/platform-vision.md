@@ -7,14 +7,13 @@ have to be re-derived from scratch every session.
 
 ## The comparison that motivates this
 
-PostHog ships a competing "self-driving" loop: signals (from their own error
-tracking, session replay, logs, health checks, plus a few external trackers)
-group into reports, an agent investigates each report, opens a PR for the
-actionable ones, and a post-merge check feeds the result back as a new signal.
-Docs: https://posthog.com/docs/self-driving/{inbox,reports,signals,self-improving-loop}
-
-That loop is **vertically integrated, iOS-style**: it's best-in-class if you
-run PostHog's own tracker and PostHog's own agent, and closed if you don't.
+Some competing "self-driving product management" tools take a vertically
+integrated approach: signals come from their own first-party tracker (their
+own error tracking, session replay, logs, health checks, plus a handful of
+external trackers), group into reports, an agent investigates each report,
+opens a PR for the actionable ones, and a post-merge check feeds the result
+back as a new signal. That loop is **iOS-style**: best-in-class if you run
+their tracker and their agent, closed if you don't.
 
 Autopilot's bet is the opposite: be the **Android** of this space — don't own
 the tracker or the agent, own the layer in between (ingest → cluster by root
@@ -29,7 +28,7 @@ plugs into whatever stack a team already has, not by forcing them onto ours.
 | **Signal sources** | Any tool can feed events in, not just named integrations | Partial — Stripe/Sentry/FullStory/Zendesk webhooks + generic MCP polling (`services/mcp_client.py`). MCP is the real "USB-C" here; named integrations are reference implementations, not the ceiling. |
 | **Fix agents** | Any coding agent can be triggered, not one owned agent | In progress — provider registry in `services/coding_agents.py` + `ProjectAgentConfig`. Started with 3 hardcoded vendors (Claude/Codex/Gemini); **current task is making this user-extensible** (custom provider entries), see below. |
 | **LLM for the core pipeline** | BYO model for clustering/scoring/embeddings/Ask AI | Not started — OpenAI is a hard requirement (README: "required... there is no substitute"). Gemini is fallback-only. This is the most iOS-like lock-in left in Autopilot's own stack. |
-| **Proactive scouts** | Generic scheduled-probe interface, not just reactive webhooks | Not started. PostHog's edge (session-replay scanning, SDK/health checks) comes from owning the tracker; Autopilot's answer shouldn't be building that — it should be a generic "scout" that runs a scheduled query against *any* connected MCP source and feeds findings into the same clustering pipeline. |
+| **Proactive scouts** | Generic scheduled-probe interface, not just reactive webhooks | Not started. Vertically-integrated competitors get proactive detection (session-replay scanning, SDK/health checks) by owning the tracker; Autopilot's answer shouldn't be building a first-party tracker — it should be a generic "scout" that runs a scheduled query against *any* connected MCP source and feeds findings into the same clustering pipeline. |
 | **Open pipeline APIs** | Each stage (ingest/cluster/score/recommend/file/fix) independently addressable by third parties | Not started. Today it's one closed flow inside the FastAPI app. |
 | **Self-hosting** | No forced cloud dependency | Done — Docker Compose, `SKIP_AUTH=true` for zero-config local runs. |
 
@@ -77,10 +76,10 @@ that gap and is cheap relative to items 2–4 above.
 
 - When adding a new signal source or fix-agent integration, ask "does this
   need to be code, or can it be data a user enters?" Default to data.
-- Don't chase feature parity with PostHog's proactive scanners (session
-  replay analysis, SDK health checks) by rebuilding their tracker — that's
-  the iOS move. Build the generic interface that lets *any* connected source
-  play that role instead.
+- Don't chase feature parity with vertically-integrated competitors' proactive
+  scanners (session replay analysis, SDK health checks) by building a
+  first-party tracker of our own — that's the iOS move. Build the generic
+  interface that lets *any* connected source play that role instead.
 - The OpenAI hard dependency is a known, tracked gap (#2 above), not an
   oversight — don't "fix" it as a drive-by change without scoping it
   properly (it touches clustering, scoring, embeddings, and Ask AI).
