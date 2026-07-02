@@ -28,7 +28,7 @@ plugs into whatever stack a team already has, not by forcing them onto ours.
 | **Signal sources** | Any tool can feed events in, not just named integrations | Partial — Stripe/Sentry/FullStory/Zendesk webhooks + generic MCP polling (`services/mcp_client.py`). MCP is the real "USB-C" here; named integrations are reference implementations, not the ceiling. |
 | **Fix agents** | Any coding agent can be triggered, not one owned agent | Done — provider registry in `services/coding_agents.py` + user-extensible `ProjectAgentConfig` (custom providers via `POST /agent-config`, not just the 3 built-ins). |
 | **LLM for the core pipeline** | BYO model for clustering/scoring/embeddings/Ask AI | Done — `services/llm.py` resolves `AI_BASE_URL` (any OpenAI-compatible endpoint: LM Studio, Ollama, vLLM, OpenRouter, ...) first, `OPENAI_API_KEY` as the zero-config default, Gemini as failure-only fallback. Embedding model + vector dimension configurable via `AI_EMBEDDING_MODEL`/`AI_EMBEDDING_DIMS`. |
-| **Proactive scouts** | Generic scheduled-probe interface, not just reactive webhooks | Not started. Vertically-integrated competitors get proactive detection (session-replay scanning, SDK/health checks) by owning the tracker; Autopilot's answer shouldn't be building a first-party tracker — it should be a generic "scout" that runs a scheduled query against *any* connected MCP source and feeds findings into the same clustering pipeline. |
+| **Proactive scouts** | Generic scheduled-probe interface, not just reactive webhooks | Done — `services/scouts.py` + `ProjectScout`: a named check against one MCP tool, own schedule, own LLM-evaluated objective. Only creates an event when there's a genuine finding, unlike plain MCP sync which mirrors everything. See below. |
 | **Open pipeline APIs** | Each stage (ingest/cluster/score/recommend/file/fix) independently addressable by third parties | Done — outbound webhooks on every stage transition (`services/webhook_dispatch.py`) plus a pluggable scoring webhook that can replace the score stage's logic entirely. See below. |
 | **Self-hosting** | No forced cloud dependency | Done — Docker Compose, `SKIP_AUTH=true` for zero-config local runs. |
 
@@ -36,8 +36,19 @@ plugs into whatever stack a team already has, not by forcing them onto ours.
 
 1. ~~User-extensible coding-agent providers~~ — done
 2. ~~BYO LLM for the core pipeline~~ — done
-3. **Generic scout interface** ← next up. Scheduled queries against any MCP source, findings feed the existing `Cluster`/`Event` pipeline. Reuses the existing `background_mcp_puller` polling infra in `main.py`.
-4. ~~Open pipeline APIs / stage-level extensibility~~ — done, see below. Jumped ahead of #3 by explicit request.
+3. ~~Generic scout interface~~ — done, see below
+4. ~~Open pipeline APIs / stage-level extensibility~~ — done, see below. Shipped ahead of #3 by explicit request.
+
+All four original roadmap items are now shipped. Next up, requested
+separately: an evaluation of the **clustering/scoring logic itself**
+(`services/evaluator.py`) — whether assign-vs-create decisions and the
+default priority formula actually produce correct groupings and correct
+"most critical first" ranking, not just whether the plumbing is pluggable.
+That work is being scoped in its own session/prompt rather than folded in
+here, deliberately sequenced *after* scouts: scouts add signal volume through
+the same clustering/scoring engine, so fixing that engine's correctness
+first means scouts (and every future signal source) inherit the fix for
+free, rather than needing re-validation once clustering changes land.
 
 ## Shipped: BYO LLM for the core pipeline
 
@@ -172,6 +183,63 @@ override, not just an event).
 `components/WebhooksConfig.tsx` (new), `components/PrioritizationConfig.tsx`,
 `components/IntegrationsPanel.tsx`, README.
 
+## Shipped: proactive scouts
+
+**Why:** every existing signal source was reactive (a webhook push) or blind
+polling (`services/mcp_client.py`'s `pull_mcp_server` mirrors every selected
+tool's result into an event verbatim, on one shared per-integration
+interval, no interpretation). Neither is "proactive detection" — a
+vertically-integrated competitor gets that by owning a tracker and scanning
+it (session replay, SDK health checks); the generic answer for a
+bring-your-own-source platform is a scheduled *check* against a source that
+only speaks up when something's actually wrong.
+
+**What changed:**
+- New `ProjectScout` (one row per named check): targets one tool on an
+  existing `mcp_server` `Integration`, with fixed `tool_arguments`, its own
+  `interval_seconds` (independent of that integration's own sync interval),
+  and a free-text `objective` — what the user is watching for.
+- `services/scouts.py`'s `run_scout()` is the whole mechanism: call the tool
+  via a new `call_mcp_tool()` helper in `mcp_client.py` (a single-tool,
+  single-session variant of the bulk poller's connection logic), then ask
+  the configured LLM (`services/llm.py`'s `ai_chat`, so this is BYO-model
+  like everything else) whether the result is "notable" against the
+  objective, with what severity. An `Event(source="scout")` is only created
+  when the verdict says yes — most runs should produce nothing, by design.
+  A found event flows through the exact same clustering/scoring/webhook
+  pipeline as any other event; there's no special-cased "scout path."
+- New `sources/scout.py` plugin: `is_negative` is always `True` (the LLM
+  step already filtered for notability before the event exists), `ux_signal`
+  maps the LLM's own severity verdict (low/medium/high/critical) to a 0–1
+  score rather than recomputing it.
+- Scheduling: `background_scout_runner` in `main.py`, same due-check
+  pattern as `background_mcp_puller` (`last_run_at + interval_seconds <=
+  now`) but per-scout instead of per-integration, since each scout has its
+  own cadence.
+- Every failure mode (missing server config, unreachable MCP server, bad
+  tool call, LLM/parse failure) is caught and recorded on
+  `scout.last_error` — a broken scout degrades to "did nothing this run,"
+  never crashes the scheduler or the manual "Run now" endpoint.
+- Frontend: `ScoutsConfig.tsx`, nested inside `McpServerConfig.tsx` (a scout
+  is meaningless without a connected MCP integration to target) — list,
+  add (tool picker from already-discovered tools, JSON arguments, objective
+  textarea, interval picker), run-now with immediate result, last
+  run/finding timestamps, per-scout enable toggle.
+
+**Known limitation, by design:** a scout can only target an MCP-connected
+source, not Stripe/Sentry/FullStory/Zendesk's native webhook integrations —
+consistent with the existing platform stance that MCP is the generic
+extension point (the "USB-C") and named integrations are reference
+implementations, not something every new capability needs to be built
+against individually.
+
+**Files touched:** `models/scout.py` (new),
+`alembic/versions/0020_scouts.py` (new), `services/scouts.py` (new),
+`services/mcp_client.py`, `services/sources/scout.py` (new),
+`services/sources/__init__.py`, `schemas/scout.py` (new),
+`api/scouts.py` (new), `main.py`, `components/ScoutsConfig.tsx` (new),
+`components/McpServerConfig.tsx`, README.
+
 ## Ground rules for future sessions
 
 - When adding a new signal source or fix-agent integration, ask "does this
@@ -193,3 +261,9 @@ override, not just an event).
   exists because a concrete use case (custom scoring plugin) demanded it —
   wait for the next concrete ask before adding one to recommend/file-issue/
   trigger-fix.
+- A "proactive" feature isn't just "poll more often" — the bar is that most
+  runs produce nothing. If a new scheduled check would create noise on
+  every tick, it's not a scout, it's a sync interval; don't blur the two.
+- Before touching `services/evaluator.py`'s clustering/scoring logic, read
+  whatever session/prompt produced the clustering evaluation this doc
+  points to above — don't re-derive the analysis from scratch.

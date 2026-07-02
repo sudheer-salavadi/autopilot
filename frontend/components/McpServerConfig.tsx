@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { apiClient } from "@/lib/api";
 import type { Integration, Project } from "@/components/IntegrationsPanel";
+import ScoutsConfig from "@/components/ScoutsConfig";
 
 type AuthType = "none" | "bearer" | "header";
 type PollingInterval = 300 | 900 | 3600;
@@ -398,6 +399,14 @@ export default function McpServerConfig({
                 Auto-syncs in the background per your selected interval.
               </p>
             </div>
+
+            <Separator />
+
+            <ScoutsConfig
+              slug={project.slug}
+              integrationId={integration.id}
+              availableTools={tools}
+            />
           </>
         )}
       </div>

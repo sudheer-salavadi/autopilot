@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api import agent_config, auth, chat, clusters, dashboard, demo, events, github_config, integrations, members, projects, scoring_config, webhook_subscriptions, webhooks
+from app.api import agent_config, auth, chat, clusters, dashboard, demo, events, github_config, integrations, members, projects, scoring_config, scouts, webhook_subscriptions, webhooks
 from app.config import settings
 from app.db.session import AsyncSessionLocal
 from app.services.demo import simulate_active_projects
@@ -166,12 +166,58 @@ async def lifespan(app: FastAPI):
             except Exception:
                 pass
 
+    async def background_scout_runner():
+        """Run each enabled scout on its own interval_seconds cadence.
+
+        Same due-check pattern as background_mcp_puller (last_run_at + interval
+        <= now), just per-scout instead of per-integration since scouts each
+        have their own schedule rather than sharing one project-wide interval.
+        """
+        from datetime import datetime, timezone
+
+        from sqlalchemy import select
+
+        from app.models.integration import Integration
+        from app.models.scout import ProjectScout
+        from app.services.scouts import run_scout
+
+        while True:
+            await asyncio.sleep(60)
+            try:
+                async with AsyncSessionLocal() as db:
+                    result = await db.execute(
+                        select(ProjectScout).where(ProjectScout.enabled == True)  # noqa: E712
+                    )
+                    due_scouts = []
+                    now = datetime.now(timezone.utc)
+                    for scout in result.scalars().all():
+                        if scout.last_run_at is None:
+                            due_scouts.append(scout)
+                            continue
+                        elapsed = (now - scout.last_run_at).total_seconds()
+                        if elapsed >= scout.interval_seconds:
+                            due_scouts.append(scout)
+
+                    for scout in due_scouts:
+                        integration = await db.get(Integration, scout.integration_id)
+                        if not integration or not integration.is_active:
+                            continue
+                        try:
+                            await run_scout(scout, integration, db)
+                        except Exception:
+                            pass
+                    if due_scouts:
+                        await db.commit()
+            except Exception:
+                pass
+
     outbox_task    = asyncio.create_task(background_outbox_worker())
     evaluator_task = asyncio.create_task(background_evaluator())
     simulator_task = asyncio.create_task(background_simulator())
     mcp_puller_task = asyncio.create_task(background_mcp_puller())
+    scout_runner_task = asyncio.create_task(background_scout_runner())
     yield
-    for task in (outbox_task, evaluator_task, simulator_task, mcp_puller_task):
+    for task in (outbox_task, evaluator_task, simulator_task, mcp_puller_task, scout_runner_task):
         task.cancel()
         try:
             await task
@@ -205,6 +251,7 @@ app.include_router(clusters.router)
 app.include_router(scoring_config.router)
 app.include_router(github_config.router)
 app.include_router(agent_config.router)
+app.include_router(scouts.router)
 app.include_router(webhook_subscriptions.router)
 app.include_router(dashboard.router)
 app.include_router(chat.router)
