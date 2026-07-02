@@ -23,13 +23,27 @@ class Settings(BaseSettings):
     SESSION_SECRET_KEY: str = _DEV_SESSION_KEY
     ENCRYPTION_KEY: str = _DEV_ENCRYPTION_KEY
 
-    # AI — OpenAI or LM Studio (OpenAI-compatible)
+    # AI — bring your own model. AI_BASE_URL points at ANY OpenAI-compatible
+    # endpoint (LM Studio, Ollama, vLLM, OpenRouter, ...) and takes priority
+    # over OPENAI_API_KEY, which remains the zero-config default so the app
+    # runs out of the box without picking a local model first.
+    AI_BASE_URL: str = ""          # e.g. http://host.docker.internal:11434/v1 (Ollama)
+    AI_API_KEY: str = ""           # most local servers ignore this — any non-empty string works
+    AI_MODEL: str = ""             # model name as served by AI_BASE_URL, e.g. "llama3.1" or "qwen2.5-coder"
+    AI_TIMEOUT: int = 300          # seconds — local models are slow
+    AI_EMBEDDING_MODEL: str = "text-embedding-3-small"
+    # Must match the embedding model's output dimension. Changing this after
+    # the DB is migrated requires a new migration (see docs/platform-vision.md).
+    AI_EMBEDDING_DIMS: int = 1536
     OPENAI_API_KEY: str = ""
-    LM_STUDIO_URL: str = ""        # e.g. http://host.docker.internal:1234/v1
-    LM_STUDIO_MODEL: str = ""      # model identifier as shown in LM Studio
-    LM_STUDIO_TIMEOUT: int = 300   # seconds — local models are slow
 
-    # Gemini fallback (used when OpenAI/LM Studio call fails)
+    # Deprecated aliases — still honored if AI_BASE_URL/AI_MODEL aren't set,
+    # so existing .env files with LM_STUDIO_* keep working unchanged.
+    LM_STUDIO_URL: str = ""
+    LM_STUDIO_MODEL: str = ""
+    LM_STUDIO_TIMEOUT: int = 300
+
+    # Gemini fallback (used only when the primary AI_BASE_URL/OpenAI call fails)
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.0-flash"
 

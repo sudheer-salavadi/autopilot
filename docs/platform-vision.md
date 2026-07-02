@@ -26,20 +26,60 @@ plugs into whatever stack a team already has, not by forcing them onto ours.
 | Pillar | What "Android-like" means here | Status |
 |---|---|---|
 | **Signal sources** | Any tool can feed events in, not just named integrations | Partial — Stripe/Sentry/FullStory/Zendesk webhooks + generic MCP polling (`services/mcp_client.py`). MCP is the real "USB-C" here; named integrations are reference implementations, not the ceiling. |
-| **Fix agents** | Any coding agent can be triggered, not one owned agent | In progress — provider registry in `services/coding_agents.py` + `ProjectAgentConfig`. Started with 3 hardcoded vendors (Claude/Codex/Gemini); **current task is making this user-extensible** (custom provider entries), see below. |
-| **LLM for the core pipeline** | BYO model for clustering/scoring/embeddings/Ask AI | Not started — OpenAI is a hard requirement (README: "required... there is no substitute"). Gemini is fallback-only. This is the most iOS-like lock-in left in Autopilot's own stack. |
+| **Fix agents** | Any coding agent can be triggered, not one owned agent | Done — provider registry in `services/coding_agents.py` + user-extensible `ProjectAgentConfig` (custom providers via `POST /agent-config`, not just the 3 built-ins). |
+| **LLM for the core pipeline** | BYO model for clustering/scoring/embeddings/Ask AI | Done — `services/llm.py` resolves `AI_BASE_URL` (any OpenAI-compatible endpoint: LM Studio, Ollama, vLLM, OpenRouter, ...) first, `OPENAI_API_KEY` as the zero-config default, Gemini as failure-only fallback. Embedding model + vector dimension configurable via `AI_EMBEDDING_MODEL`/`AI_EMBEDDING_DIMS`. |
 | **Proactive scouts** | Generic scheduled-probe interface, not just reactive webhooks | Not started. Vertically-integrated competitors get proactive detection (session-replay scanning, SDK/health checks) by owning the tracker; Autopilot's answer shouldn't be building a first-party tracker — it should be a generic "scout" that runs a scheduled query against *any* connected MCP source and feeds findings into the same clustering pipeline. |
 | **Open pipeline APIs** | Each stage (ingest/cluster/score/recommend/file/fix) independently addressable by third parties | Not started. Today it's one closed flow inside the FastAPI app. |
 | **Self-hosting** | No forced cloud dependency | Done — Docker Compose, `SKIP_AUTH=true` for zero-config local runs. |
 
 ## Roadmap (priority order, as of 2026-07-02)
 
-1. **User-extensible coding-agent providers** ← *current task, see plan below*
-2. **BYO LLM for the core pipeline** — biggest remaining vertical lock-in. Likely shape: an LLM-provider abstraction (already have OpenAI + Gemini clients in `services/`) generalized to any OpenAI-compatible endpoint, with local-model support extended from Simulate-mode-only to the real evaluator.
-3. **Generic scout interface** — scheduled queries against any MCP source, findings feed the existing `Cluster`/`Event` pipeline. Reuses the existing `background_mcp_puller` polling infra in `main.py`.
-4. **Open pipeline APIs / stage-level extensibility** — biggest scope, lowest current priority. Revisit once 2 and 3 are done.
+1. ~~User-extensible coding-agent providers~~ — done
+2. ~~BYO LLM for the core pipeline~~ — done, see below
+3. **Generic scout interface** ← next up. Scheduled queries against any MCP source, findings feed the existing `Cluster`/`Event` pipeline. Reuses the existing `background_mcp_puller` polling infra in `main.py`.
+4. **Open pipeline APIs / stage-level extensibility** — biggest scope, lowest current priority. Revisit once 3 is done.
 
-## Current task: user-extensible coding-agent providers
+## Shipped: BYO LLM for the core pipeline
+
+**Why:** README used to say "OpenAI is required... there is no substitute" for
+clustering, scoring, embeddings, and Ask AI, with local models (LM Studio)
+documented as Simulate-mode-only. That was actually stale — the chat-completion
+path (`ai_chat`, formerly living in `services/demo.py`) already preferred
+LM Studio when configured, for every caller including the real evaluator and
+Ask AI, not just demo-event generation. The genuine gap was narrower than the
+docs implied: embeddings were unconditionally OpenAI, and the config/docs
+made the whole thing look hard-locked when most of it wasn't.
+
+**What changed:**
+- New `services/llm.py` is now the single place that constructs model
+  clients. `primary_client()` resolves `AI_BASE_URL` + `AI_MODEL` (any
+  OpenAI-compatible endpoint) first, falls back to `OPENAI_API_KEY` as the
+  zero-config default. `ai_chat()` still falls back to Gemini only on
+  failure — never the primary path. `LM_STUDIO_URL`/`LM_STUDIO_MODEL` are
+  kept as back-compat aliases for `AI_BASE_URL`/`AI_MODEL` so existing `.env`
+  files don't break.
+- `embedding_client()` uses the same `AI_BASE_URL` resolution, so a fully
+  local deployment (e.g. Ollama for both chat and embeddings) needs no cloud
+  key at all. Model name is `AI_EMBEDDING_MODEL` (default
+  `text-embedding-3-small`).
+- The vector column dimension was hardcoded to 1536 in both `Cluster.embedding`
+  and `Event.embedding` — a real constraint, not just a doc issue, since
+  pgvector enforces exact dimension match and local embedding models rarely
+  emit 1536 dims. Made configurable via `AI_EMBEDDING_DIMS`, read by both the
+  SQLAlchemy models and a new migration (`0018`) that resizes the columns
+  (nulling stale embeddings) when it differs from the previous default.
+  **Known limitation:** changing `AI_EMBEDDING_DIMS` a second time after
+  `0018` has already run needs a manual `ALTER TABLE` — Alembic migrations
+  don't re-run when config changes. Fine for "pick a model once per
+  deployment," not for hot-swapping embedding providers.
+- `evaluator.py`, `chat.py`, and `demo.py` now import from `llm.py` instead of
+  each other; `demo.py` is back to being Simulate-content-generation only.
+
+**Files touched:** `config.py`, `services/llm.py` (new), `services/demo.py`,
+`services/evaluator.py`, `api/chat.py`, `models/event.py`, `models/cluster.py`,
+`alembic/versions/0018_configurable_embedding_dims.py`, README, `.env.example`.
+
+## Shipped: user-extensible coding-agent providers
 
 **Why:** the fix-trigger feature (shipped) hardcodes exactly three vendors in
 `PROVIDERS` (`services/coding_agents.py`). That's the most iOS-like part of an
@@ -80,6 +120,9 @@ that gap and is cheap relative to items 2–4 above.
   scanners (session replay analysis, SDK health checks) by building a
   first-party tracker of our own — that's the iOS move. Build the generic
   interface that lets *any* connected source play that role instead.
-- The OpenAI hard dependency is a known, tracked gap (#2 above), not an
-  oversight — don't "fix" it as a drive-by change without scoping it
-  properly (it touches clustering, scoring, embeddings, and Ask AI).
+- Before assuming something is hard-locked to a vendor, check whether it
+  already isn't — the OpenAI dependency turned out to be mostly a stale-docs
+  problem (`ai_chat` already preferred LM Studio when configured), not a code
+  problem. Read the code path, not just the README, before scoping a fix.
+- All model access goes through `services/llm.py` now — don't construct an
+  `AsyncOpenAI` client anywhere else, or the next BYO-model gap creeps back in.

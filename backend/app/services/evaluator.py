@@ -5,8 +5,10 @@ Groups raw events into clusters (same root cause) and scores each cluster
 using a weighted formula: Score = Revenue*w1 + Frequency*w2 + UX*w3
 
 Clustering uses a three-tier approach to minimise LLM API calls:
-  1. Batch-embed all unclustered events in one OpenAI call at the start of
-     evaluate_project (one API call regardless of event count).
+  1. Batch-embed all unclustered events in one call to the configured
+     embedding model (OpenAI, or any BYO OpenAI-compatible endpoint — see
+     app.services.llm) at the start of evaluate_project, regardless of
+     event count.
   2. pgvector `<=>` similarity against open cluster embeddings decides
      assign vs create for the high-confidence and low-confidence cases.
   3. LLM is called only for the ambiguous middle range (0.60–0.88 similarity)
@@ -17,7 +19,6 @@ import asyncio
 import uuid
 from datetime import datetime, timezone
 
-from openai import AsyncOpenAI
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -27,11 +28,9 @@ from app.db.session import AsyncSessionLocal
 from app.models.cluster import Cluster, ClusterEvent
 from app.models.event import Event
 from app.models.scoring_config import ProjectScoringConfig
-from app.services.demo import ai_chat, _parse_json
+from app.services.llm import ai_chat, _parse_json, embedding_client
 import app.services.sources as sources  # registers all plugins on import
 
-_EMBEDDING_MODEL = "text-embedding-3-small"
-_EMBEDDING_DIMS = 1536
 _REGRESSION_SIMILARITY_THRESHOLD = 0.92
 
 # Thresholds for the three-tier clustering decision:
@@ -42,19 +41,14 @@ _AUTO_ASSIGN_THRESHOLD = 0.88
 _AUTO_CREATE_THRESHOLD = 0.60
 
 
-def _embedding_client() -> AsyncOpenAI | None:
-    if settings.OPENAI_API_KEY:
-        return AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-    return None
-
-
 async def _generate_embedding(text_input: str) -> list[float] | None:
     """Generate a single embedding. Used for cluster title/root_cause only."""
-    client = _embedding_client()
-    if not client:
+    resolved = embedding_client()
+    if not resolved:
         return None
+    client, model = resolved
     try:
-        resp = await client.embeddings.create(model=_EMBEDDING_MODEL, input=text_input)
+        resp = await client.embeddings.create(model=model, input=text_input)
         return resp.data[0].embedding
     except Exception:
         return None
@@ -65,13 +59,15 @@ async def _batch_embed_events(
 ) -> None:
     """Embed all events that don't have an embedding yet in a single API call.
 
-    OpenAI's /embeddings endpoint accepts up to 2048 inputs per request.
-    We store the result on event.embedding so subsequent evaluate_project
-    calls skip these events entirely — no redundant embedding work.
+    The embeddings endpoint (OpenAI, or any OpenAI-compatible BYO endpoint)
+    accepts a batch of inputs per request. We store the result on
+    event.embedding so subsequent evaluate_project calls skip these events
+    entirely — no redundant embedding work.
     """
-    client = _embedding_client()
-    if not client:
+    resolved = embedding_client()
+    if not resolved:
         return
+    client, model = resolved
 
     to_embed = [e for e in events if e.embedding is None]
     if not to_embed:
@@ -79,7 +75,7 @@ async def _batch_embed_events(
 
     texts = [summaries[e.id] for e in to_embed]
     try:
-        resp = await client.embeddings.create(model=_EMBEDDING_MODEL, input=texts)
+        resp = await client.embeddings.create(model=model, input=texts)
         for event, emb_obj in zip(to_embed, resp.data):
             event.embedding = emb_obj.embedding
             db.add(event)

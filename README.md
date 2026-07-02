@@ -27,7 +27,7 @@ Autopilot acts as a product manager that never sleeps: it reads every signal, li
 | Backend | FastAPI, SQLAlchemy 2.0, Alembic, PostgreSQL + pgvector |
 | Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS v4 |
 | Auth | WorkOS |
-| AI | OpenAI API (required), Gemini optional fallback |
+| AI | Bring your own model (any OpenAI-compatible endpoint) — OpenAI is the zero-config default, Gemini an optional failure fallback |
 | Deployment | Docker Compose |
 
 ## Self-hosting
@@ -36,7 +36,7 @@ Autopilot acts as a product manager that never sleeps: it reads every signal, li
 
 - Docker and Docker Compose
 - A [WorkOS](https://workos.com) account (free tier works — used for auth) **or** use `SKIP_AUTH=true` to skip auth entirely (see below)
-- An **OpenAI API key** — required for issue clustering, scoring, embeddings, and Ask AI. Without it the evaluator won't run. A Gemini key can be set as a fallback for transient failures (`GEMINI_API_KEY`), but does not replace OpenAI.
+- A model for clustering, scoring, embeddings, and Ask AI — **any** OpenAI-compatible endpoint works (LM Studio, Ollama, vLLM, OpenRouter, ...), or an OpenAI API key as the zero-config default. See **AI model configuration** below.
 
 ### Quickest start — no WorkOS account needed
 
@@ -45,7 +45,7 @@ Set `SKIP_AUTH=true` in your `.env` to bypass authentication completely. A "Dev 
 ```bash
 cp .env.example .env
 # Uncomment SKIP_AUTH=true in .env
-# Add your OPENAI_API_KEY
+# Add an OPENAI_API_KEY, or point AI_BASE_URL at a local model (see below) — either works
 docker compose up
 docker compose exec backend alembic upgrade head
 # Visit http://localhost:3000
@@ -95,21 +95,45 @@ Visit `http://localhost:3000`
 
 ## AI model configuration
 
-**OpenAI is required** for clustering, scoring, embeddings, and Ask AI — there is no substitute for these core features.
+Autopilot is bring-your-own-model. `AI_BASE_URL` points at **any OpenAI-compatible endpoint** — LM Studio, Ollama, vLLM, OpenRouter, a hosted inference provider, whatever you already run — and is used for clustering, scoring, root-cause synthesis, and Ask AI. This is the same code path as production, not a Simulate-only shortcut, so you can run the entire pipeline on infrastructure you control.
 
-A Gemini key can be set as a fallback for when OpenAI calls fail (e.g. rate limits):
+```env
+# Ollama example — pull a model first: ollama pull llama3.1
+AI_BASE_URL=http://host.docker.internal:11434/v1
+AI_MODEL=llama3.1
+
+# LM Studio example
+# AI_BASE_URL=http://host.docker.internal:1234/v1
+# AI_MODEL=your-model-name-from-lm-studio
+
+# AI_API_KEY is optional — most local servers ignore it, some hosted
+# OpenAI-compatible providers (e.g. OpenRouter) require a real key
+# AI_API_KEY=
+```
+
+If `AI_BASE_URL` is unset, Autopilot falls back to `OPENAI_API_KEY` — this is the zero-config default so the app works out of the box, not a hard requirement:
+
+```env
+OPENAI_API_KEY=sk-...
+```
+
+A Gemini key can additionally be set as a **failure fallback** — used only when the primary call (local model or OpenAI) errors out, e.g. rate limits or an outage. It is never the primary path:
 
 ```env
 GEMINI_API_KEY=AIza...
 GEMINI_MODEL=gemini-2.0-flash   # optional, this is the default
 ```
 
-LM Studio can be pointed at for demo event generation in Simulate mode only (it is not used by the evaluator or chat):
+### Embeddings
+
+Clustering uses vector embeddings for similarity search (pgvector). By default this calls OpenAI's `text-embedding-3-small` (1536 dimensions) if `OPENAI_API_KEY` is set, or the same `AI_BASE_URL` endpoint if one is configured and it serves an embeddings model. To use a different embedding model:
 
 ```env
-LM_STUDIO_URL=http://host.docker.internal:1234/v1
-LM_STUDIO_MODEL=your-model-name
+AI_EMBEDDING_MODEL=nomic-embed-text   # or whatever your endpoint serves
+AI_EMBEDDING_DIMS=768                 # must match that model's output dimension
 ```
+
+`AI_EMBEDDING_DIMS` sizes the database's vector column (`alembic/versions/0018_configurable_embedding_dims.py` reads it at migration time), so set it **before** running `alembic upgrade head` on a fresh database. If you change it after the fact on an existing database, you'll need a follow-up migration or manual `ALTER TABLE ... ALTER COLUMN embedding TYPE vector(N)` — changing embedding dimension always invalidates previously-stored embeddings, since they're no longer comparable to new ones. Without any embedding model configured, clustering still works — it falls through to the LLM-only clustering path, just with more model calls.
 
 ## MCP Server integration (optional)
 

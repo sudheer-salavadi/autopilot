@@ -1,126 +1,16 @@
 import asyncio
-import json
 import logging
-import re
 import random
 import uuid
 from datetime import datetime, timezone
-from typing import Tuple
 
-from openai import AsyncOpenAI, BadRequestError, RateLimitError
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
 from app.db.session import AsyncSessionLocal
+from app.services.llm import ai_chat, _parse_json
 
 logger = logging.getLogger(__name__)
-
-
-def _make_openai(base_url: str | None = None, api_key: str = "", timeout: int | None = None) -> AsyncOpenAI:
-    kwargs: dict = {"api_key": api_key}
-    if base_url:
-        kwargs["base_url"] = base_url
-    if timeout is not None:
-        kwargs["timeout"] = timeout
-    return AsyncOpenAI(**kwargs)
-
-
-def _ai_client() -> Tuple[AsyncOpenAI, str, bool]:
-    """Returns (client, model, is_local). Prefers LM Studio when LM_STUDIO_URL is set."""
-    if settings.LM_STUDIO_URL:
-        return (
-            _make_openai(
-                base_url=settings.LM_STUDIO_URL,
-                api_key="lm-studio",
-                timeout=settings.LM_STUDIO_TIMEOUT,
-            ),
-            settings.LM_STUDIO_MODEL or "local-model",
-            True,
-        )
-    return _make_openai(api_key=settings.OPENAI_API_KEY), "gpt-5-nano-2025-08-07", False
-
-
-def _parse_json(text: str) -> dict:
-    """Extract JSON from a response that may be wrapped in markdown code blocks."""
-    text = text.strip()
-    # Strip ```json ... ``` or ``` ... ```
-    text = re.sub(r"^```(?:json)?\s*", "", text)
-    text = re.sub(r"\s*```$", "", text)
-    return json.loads(text)
-
-
-async def ai_chat(
-    messages: list[dict],
-    temperature: float = 0.3,
-    json_mode: bool = True,
-) -> str:
-    """Call the primary AI model and return the content string.
-
-    Falls back to Gemini (via its OpenAI-compatible endpoint) if the primary
-    call fails and GEMINI_API_KEY is configured.
-    Set json_mode=False for plain-text responses (e.g. chat).
-    """
-    client, model, is_local = _ai_client()
-    kwargs = {} if is_local or not json_mode else {"response_format": {"type": "json_object"}}
-    logger.info("AI call → model=%s", model)
-    try:
-        response = await client.chat.completions.create(
-            model=model,
-            messages=messages,
-            temperature=temperature,
-            **kwargs,
-        )
-        logger.info("AI call ✓ model=%s", model)
-        return response.choices[0].message.content
-    except BadRequestError as e:
-        # Some models (e.g. gpt-5-nano, o-series) only support default temperature.
-        # Retry once without the temperature parameter.
-        if "temperature" in str(e) and "unsupported_value" in str(e):
-            logger.info("Model %s does not support temperature=%.1f, retrying with default", model, temperature)
-            response = await client.chat.completions.create(
-                model=model,
-                messages=messages,
-                **kwargs,
-            )
-            logger.info("AI call ✓ model=%s (default temperature)", model)
-            return response.choices[0].message.content
-        logger.warning("AI call failed for model %s: %s", model, e)
-        if not settings.GEMINI_API_KEY:
-            raise
-        logger.info("Falling back to Gemini (%s)", settings.GEMINI_MODEL)
-    except RateLimitError as e:
-        logger.warning("AI rate limit / quota exceeded for model %s: %s", model, e)
-        if not settings.GEMINI_API_KEY:
-            raise
-        logger.info("Falling back to Gemini (%s)", settings.GEMINI_MODEL)
-    except Exception as e:
-        logger.warning("AI call failed for model %s: %s", model, e)
-        if not settings.GEMINI_API_KEY:
-            raise
-        logger.info("Falling back to Gemini (%s)", settings.GEMINI_MODEL)
-
-    gemini = _make_openai(
-        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-        api_key=settings.GEMINI_API_KEY,
-    )
-    logger.info("AI call → model=%s (Gemini fallback)", settings.GEMINI_MODEL)
-    gemini_kwargs: dict = {} if not json_mode else {"response_format": {"type": "json_object"}}
-    try:
-        response = await gemini.chat.completions.create(
-            model=settings.GEMINI_MODEL,
-            messages=messages,
-            temperature=temperature,
-            **gemini_kwargs,
-        )
-        logger.info("AI call ✓ model=%s (Gemini fallback)", settings.GEMINI_MODEL)
-        return response.choices[0].message.content
-    except RateLimitError as e:
-        logger.error("Gemini rate limit / quota exceeded: %s", e)
-        raise
-    except Exception as e:
-        logger.error("Gemini fallback also failed: %s", e)
-        raise
 
 # Scenarios are grouped into 4 cross-source crisis themes so events from different
 # sources describe the same underlying incident and cluster together tightly.
