@@ -221,6 +221,31 @@ async def create_issue(
         return resp.json()
 
 
+async def add_issue_comment(
+    repo: str,
+    issue_number: int,
+    body: str,
+    installation_id: int | None = None,
+    token: str | None = None,
+) -> dict:
+    """Post a comment on an existing issue (e.g. a coding-agent trigger phrase)."""
+    if installation_id is not None:
+        auth_token = await get_installation_token(installation_id)
+    elif token:
+        auth_token = token
+    else:
+        raise ValueError("Either installation_id or token must be provided")
+
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(
+            f"{_GITHUB_API}/repos/{repo}/issues/{issue_number}/comments",
+            headers=_headers(auth_token),
+            json={"body": body},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
 async def reopen_issue(
     repo: str,
     issue_number: int,

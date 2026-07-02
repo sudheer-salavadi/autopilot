@@ -5,6 +5,7 @@ import Image from "next/image";
 import {
   IconBrandGithub,
   IconCircleFilled,
+  IconRobot,
   IconServer,
 } from "@tabler/icons-react";
 import { cn } from "@/lib/utils";
@@ -13,6 +14,7 @@ import IntegrationConfig from "@/components/IntegrationConfig";
 import IntegrationPreview from "@/components/IntegrationPreview";
 import McpServerConfig from "@/components/McpServerConfig";
 import GitHubConfig, { type GithubConfig } from "@/components/GitHubConfig";
+import CodingAgentsConfig, { type AgentProvider } from "@/components/CodingAgentsConfig";
 
 export interface Integration {
   id: string;
@@ -37,6 +39,8 @@ const DEFAULT_GITHUB_CONFIG: GithubConfig = {
   autopilot_enabled: false,
   autopilot_min_score: 0.7,
 };
+
+const DEFAULT_AGENT_PROVIDERS: AgentProvider[] = [];
 
 type CatalogEntry = {
   type: string;
@@ -84,6 +88,11 @@ const CATALOG: { group: string; items: CatalogEntry[] }[] = [
         label: "GitHub",
         icon: <IconBrandGithub className="size-5" />,
       },
+      {
+        type: "coding_agents",
+        label: "Coding Agents",
+        icon: <IconRobot className="size-5" />,
+      },
     ],
   },
 ];
@@ -129,12 +138,14 @@ export default function IntegrationsPanel({
   initialIntegrations,
   initialSimulatingTypes = [],
   initialGithubConfig,
+  initialAgentProviders,
   appSlug = "",
 }: {
   project: Project;
   initialIntegrations: Integration[];
   initialSimulatingTypes?: string[];
   initialGithubConfig?: GithubConfig;
+  initialAgentProviders?: AgentProvider[];
   appSlug?: string;
 }) {
   const [integrations, setIntegrations] = useState(initialIntegrations);
@@ -143,6 +154,8 @@ export default function IntegrationsPanel({
   const [githubConnected, setGithubConnected] = useState(
     !!(initialGithubConfig?.is_installed && initialGithubConfig?.repo)
   );
+  const agentProviders = initialAgentProviders ?? DEFAULT_AGENT_PROVIDERS;
+  const agentsConnected = agentProviders.some((p) => p.enabled);
   const api = apiClient();
 
   const configuredMap = new Map(integrations.map((i) => [i.type, i]));
@@ -195,6 +208,9 @@ export default function IntegrationsPanel({
               const isSelected = selectedType === item.type;
               const simulating = simulatingTypes.has(item.type);
               const isGithub = item.type === "github";
+              const isCodingAgents = item.type === "coding_agents";
+              const hasOwnConnectedState = isGithub || isCodingAgents;
+              const connectedState = isGithub ? githubConnected : isCodingAgents ? agentsConnected : undefined;
               return (
                 <button
                   key={item.type}
@@ -216,16 +232,16 @@ export default function IntegrationsPanel({
                     <div className="flex items-center gap-1.5 mt-0.5">
                       <StatusDot
                         simulating={simulating}
-                        integration={isGithub ? undefined : configured}
-                        connected={isGithub ? githubConnected : undefined}
+                        integration={hasOwnConnectedState ? undefined : configured}
+                        connected={connectedState}
                       />
                       <span className="text-[11px] text-muted-foreground">
                         {item.disabled
                           ? "Coming soon"
                           : statusLabel(
                               simulating,
-                              isGithub ? undefined : configured,
-                              isGithub ? githubConnected : undefined
+                              hasOwnConnectedState ? undefined : configured,
+                              connectedState
                             )}
                       </span>
                     </div>
@@ -256,6 +272,20 @@ export default function IntegrationsPanel({
                   onConfigSaved={(cfg) =>
                     setGithubConnected(!!(cfg.is_installed && cfg.repo))
                   }
+                />
+              </div>
+            );
+          }
+          if (item.type === "coding_agents") {
+            return (
+              <div
+                key="coding_agents"
+                className={cn("flex-1 overflow-y-auto p-6", !isVisible && "hidden")}
+              >
+                <CodingAgentsConfig
+                  slug={project.slug}
+                  initialProviders={agentProviders}
+                  githubConnected={githubConnected}
                 />
               </div>
             );
