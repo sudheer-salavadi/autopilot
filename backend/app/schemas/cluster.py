@@ -40,6 +40,12 @@ class ClusterOut(BaseModel):
     regression_count: int = 0
     github_issue_number: int | None = None
     github_issue_url: str | None = None
+    # Coding-agent fix tracking
+    fix_provider: str | None = None
+    fix_requested_at: datetime | None = None
+    fix_pr_number: int | None = None
+    fix_pr_url: str | None = None
+    fix_pr_state: str | None = None
     event_ids: list[uuid.UUID] = []
     event_payloads: list[ClusterEventOut] | None = None
 

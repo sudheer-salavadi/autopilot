@@ -66,6 +66,17 @@ class Cluster(Base):
     github_issue_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     github_issue_url: Mapped[str | None] = mapped_column(String, nullable=True)
 
+    # Coding-agent fix tracking — set when a "Fix with <provider>" trigger is posted
+    fix_provider: Mapped[str | None] = mapped_column(String, nullable=True)
+    fix_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Populated once a PR referencing the issue is detected via the GitHub webhook
+    fix_pr_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    fix_pr_url: Mapped[str | None] = mapped_column(String, nullable=True)
+    # "open" | "merged" | "closed"
+    fix_pr_state: Mapped[str | None] = mapped_column(String, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

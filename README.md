@@ -17,6 +17,7 @@ Autopilot acts as a product manager that never sleeps: it reads every signal, li
 - **Scores every issue by business impact** — revenue at risk, frequency, and UX friction signals, weighted however you choose
 - **Explains root cause and recommends a fix** — see affected users, cross-source signal breakdown, and a suggested next step
 - **Files GitHub issues** — connect a repo and send any issue to your tracker, pre-written with full context
+- **Fixes with a coding agent** — trigger Claude Code, OpenAI Codex, or Gemini Code Assist on a filed issue with one click, and see the resulting PR linked back automatically
 - **Ask AI** — chat with the data to answer questions like "what's causing the most churn?" or "which users are affected by the checkout bug?"
 
 ## Stack
@@ -129,8 +130,8 @@ Autopilot can file GitHub issues automatically when a problem cluster exceeds yo
 1. [Register a GitHub App](https://github.com/settings/apps/new)
    - Callback URL: `{FRONTEND_URL}/github/callback`
    - Webhook URL: `{BACKEND_URL}/api/webhooks/github-app`
-   - Permissions: Issues → Read & Write, Metadata → Read
-   - Events: Issues, Installation
+   - Permissions: Issues → Read & Write, Pull requests → Read-only, Metadata → Read
+   - Events: Issues, Pull request, Installation
 2. Add to `.env`:
    ```env
    GITHUB_APP_ID=your_app_id
@@ -141,10 +142,25 @@ Autopilot can file GitHub issues automatically when a problem cluster exceeds yo
    ```
 3. In the app: go to **Integrations → GitHub** → Install GitHub App → select a repo
 
+> If you registered the GitHub App before the **Pull requests** permission/event existed, update the App's permissions on GitHub and accept the new grant on each installation — otherwise PR-linking (see below) won't fire.
+
 To test webhooks locally, use a tunnel:
 ```bash
 cloudflared tunnel --url http://localhost:8000
 ```
+
+## Fix with a coding agent (optional)
+
+Once a GitHub issue is filed for a cluster, Autopilot can trigger a fix from Claude Code, OpenAI Codex, or Gemini Code Assist directly from the issue's detail panel — closing the loop from *identified* to *fixed* without leaving the app.
+
+This doesn't run any agent itself. Each provider is its own GitHub App/Action that you install separately on your repo and that watches for a trigger comment (e.g. `@claude`) on an issue; Autopilot just posts that comment and links back the PR the agent opens.
+
+1. In the app: go to **Integrations → Coding Agents**
+2. Toggle on the providers you have installed on your repo (Claude Code, OpenAI Codex, Gemini Code Assist) — see each provider's own setup guide linked in that panel
+3. Optionally customize the trigger comment per provider — the defaults follow each vendor's documented convention, but exact syntax can vary by how a repo has it configured
+4. On any cluster with a filed GitHub issue, click **Fix with…** and pick a provider
+
+Autopilot doesn't verify the provider is actually installed on your repo — if nothing happens after triggering, double-check the provider's GitHub App/Action is set up and that its trigger phrase matches what Autopilot posted. Once the agent opens a PR that references the issue (e.g. `Fixes #123`), Autopilot links it back to the cluster and shows its state (open / merged / closed).
 
 ## Evaluating the product before connecting real integrations
 

@@ -32,6 +32,11 @@ export interface Cluster {
   regression_count: number;
   github_issue_number: number | null;
   github_issue_url: string | null;
+  fix_provider: string | null;
+  fix_requested_at: string | null;
+  fix_pr_number: number | null;
+  fix_pr_url: string | null;
+  fix_pr_state: "open" | "merged" | "closed" | null;
   event_ids: string[];
   event_payloads?: ClusterEvent[];
 }

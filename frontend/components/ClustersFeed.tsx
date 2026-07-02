@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { IconArrowDown, IconArrowUp, IconArrowsUpDown, IconBrandGithub, IconZoomQuestion, IconSparkles, IconCheck, IconChevronDown, IconChevronLeft, IconChevronRight, IconChevronUp, IconChevronsDown, IconChevronsUp, IconExternalLink, IconHelpCircle, IconMinus, IconRefresh, IconSearch, IconX } from "@tabler/icons-react";
+import { IconArrowDown, IconArrowUp, IconArrowsUpDown, IconBrandGithub, IconZoomQuestion, IconSparkles, IconCheck, IconChevronDown, IconChevronLeft, IconChevronRight, IconChevronUp, IconChevronsDown, IconChevronsUp, IconExternalLink, IconHelpCircle, IconMinus, IconRefresh, IconRobot, IconSearch, IconX } from "@tabler/icons-react";
 import { JsonBlock } from "@/components/JsonBlock";
 import { formatRootCause, formatTitle } from "@/lib/format-tokens";
 import { type Cluster, type ClusterEvent, type ClustersPage, type ClustersParams, useClusters } from "@/lib/hooks/useClusters";
+import { type AgentProvider } from "@/components/CodingAgentsConfig";
 import { apiClient } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -446,7 +447,43 @@ function ClusterDetail({
   const [filingIssue, setFilingIssue]         = useState(false);
   const [issueError, setIssueError]           = useState("");
   const [resolving, setResolving]             = useState(false);
+  const [agentProviders, setAgentProviders]   = useState<AgentProvider[] | null>(null);
+  const [triggeringFix, setTriggeringFix]     = useState(false);
+  const [fixError, setFixError]               = useState("");
   const api = apiClient();
+
+  useEffect(() => {
+    api.get<AgentProvider[]>(`/api/projects/${slug}/agent-config`)
+      .then(setAgentProviders)
+      .catch(() => setAgentProviders([]));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slug]);
+
+  function providerName(id: string): string {
+    return agentProviders?.find((p) => p.provider === id)?.name ?? id;
+  }
+
+  async function handleTriggerFix(provider: string) {
+    setTriggeringFix(true);
+    setFixError("");
+    try {
+      const result = await api.post<{ fix_provider: string; fix_requested_at: string }>(
+        `/api/projects/${slug}/clusters/${cluster.id}/agent-fix`,
+        { provider }
+      );
+      onClusterUpdated?.({
+        fix_provider: result.fix_provider,
+        fix_requested_at: result.fix_requested_at,
+        fix_pr_number: null,
+        fix_pr_url: null,
+        fix_pr_state: null,
+      });
+    } catch (err) {
+      setFixError(err instanceof Error ? err.message : "Failed to trigger fix");
+    } finally {
+      setTriggeringFix(false);
+    }
+  }
 
   async function handleResolve() {
     setResolving(true);
@@ -576,6 +613,121 @@ function ClusterDetail({
                 <IconBrandGithub className="size-3.5" />
                 {filingIssue ? "Filing…" : "Create GitHub issue"}
               </Button>
+            )}
+
+            {(() => {
+              const enabledProviders = agentProviders?.filter((p) => p.enabled) ?? [];
+
+              // A PR already exists for the latest fix attempt — show its state, no menu.
+              if (cluster.fix_pr_number) {
+                const stateClass =
+                  cluster.fix_pr_state === "merged" ? "text-violet-600" :
+                  cluster.fix_pr_state === "closed" ? "text-muted-foreground" :
+                  "text-emerald-600";
+                return (
+                  <a
+                    href={cluster.fix_pr_url ?? "#"}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={`inline-flex items-center gap-1.5 text-[11px] hover:underline ${stateClass}`}
+                  >
+                    <IconRobot className="size-3.5" />
+                    PR #{cluster.fix_pr_number} · {cluster.fix_pr_state ?? "open"}
+                    {cluster.fix_provider && ` (${providerName(cluster.fix_provider)})`}
+                    <IconExternalLink className="size-3" />
+                  </a>
+                );
+              }
+
+              // Fix requested but no PR seen yet — let the user retry / try another agent.
+              if (cluster.fix_requested_at) {
+                return (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={triggeringFix}
+                        className="h-7 px-2 text-xs gap-1.5"
+                      >
+                        <IconRobot className="size-3.5" />
+                        {triggeringFix
+                          ? "Requesting…"
+                          : `Requested via ${providerName(cluster.fix_provider!)} · ${timeAgo(cluster.fix_requested_at)}`}
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start">
+                      <DropdownMenuLabel>Fix with</DropdownMenuLabel>
+                      <DropdownMenuSeparator />
+                      {enabledProviders.map((p) => (
+                        <DropdownMenuItem key={p.provider} onClick={() => handleTriggerFix(p.provider)}>
+                          {p.name}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                );
+              }
+
+              // No fix requested yet.
+              if (!cluster.github_issue_number) {
+                return (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground/50 cursor-not-allowed">
+                        <IconRobot className="size-3.5" />
+                        Fix with…
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent>File a GitHub issue first</TooltipContent>
+                  </Tooltip>
+                );
+              }
+
+              if (agentProviders !== null && enabledProviders.length === 0) {
+                return (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <a
+                        href={`/projects/${slug}/integrations`}
+                        className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+                      >
+                        <IconRobot className="size-3.5" />
+                        Fix with…
+                      </a>
+                    </TooltipTrigger>
+                    <TooltipContent>No coding agents enabled — set up in Settings → Coding Agents</TooltipContent>
+                  </Tooltip>
+                );
+              }
+
+              return (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={triggeringFix || enabledProviders.length === 0}
+                      className="h-7 px-2 text-xs gap-1.5"
+                    >
+                      <IconRobot className="size-3.5" />
+                      {triggeringFix ? "Requesting…" : "Fix with…"}
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start">
+                    <DropdownMenuLabel>Fix with</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    {enabledProviders.map((p) => (
+                      <DropdownMenuItem key={p.provider} onClick={() => handleTriggerFix(p.provider)}>
+                        {p.name}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              );
+            })()}
+            {fixError && (
+              <span className="text-[11px] text-destructive">{fixError}</span>
             )}
 
             {cluster.status !== "resolved" && (

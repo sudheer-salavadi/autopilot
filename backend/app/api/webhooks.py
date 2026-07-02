@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+import re
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -22,6 +23,17 @@ from app.services.webhooks import (
 )
 
 router = APIRouter(prefix="/api/webhooks", tags=["webhooks"])
+
+# Matches GitHub's own "closing keyword" convention (Fixes #12, Closes #34, Resolves #56, ...)
+# so we only link a PR to a cluster's issue when the PR actually claims to resolve it.
+_CLOSES_ISSUE_RE = re.compile(
+    r"(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)", re.IGNORECASE
+)
+
+
+def _referenced_issue_numbers(pull_request: dict) -> set[int]:
+    text = f"{pull_request.get('title', '')}\n{pull_request.get('body') or ''}"
+    return {int(n) for n in _CLOSES_ISSUE_RE.findall(text)}
 
 
 async def _get_active_integration(
@@ -239,6 +251,52 @@ async def github_app_webhook(
             cluster.status = ClusterStatus.investigating
 
         await db.commit()
+
+    # ── pull_request: link a fix PR back to the cluster whose issue it closes ──
+    if gh_event == "pull_request":
+        installation_id = payload.get("installation", {}).get("id")
+        repo_full_name = payload.get("repository", {}).get("full_name")
+        pr = payload.get("pull_request", {})
+        pr_number = pr.get("number")
+
+        if not installation_id or not repo_full_name or not pr_number:
+            return {"received": True}
+
+        cfg_result = await db.execute(
+            select(ProjectGithubConfig).where(
+                ProjectGithubConfig.installation_id == installation_id,
+                ProjectGithubConfig.repo == repo_full_name,
+            )
+        )
+        gh_config = cfg_result.scalar_one_or_none()
+        if not gh_config:
+            return {"received": True}
+
+        if action in ("opened", "edited", "reopened"):
+            issue_numbers = _referenced_issue_numbers(pr)
+            if issue_numbers:
+                clusters_result = await db.execute(
+                    select(Cluster).where(
+                        Cluster.project_id == gh_config.project_id,
+                        Cluster.github_issue_number.in_(issue_numbers),
+                    )
+                )
+                for cluster in clusters_result.scalars().all():
+                    cluster.fix_pr_number = pr_number
+                    cluster.fix_pr_url = pr.get("html_url")
+                    cluster.fix_pr_state = "open"
+                await db.commit()
+
+        elif action == "closed":
+            clusters_result = await db.execute(
+                select(Cluster).where(
+                    Cluster.project_id == gh_config.project_id,
+                    Cluster.fix_pr_number == pr_number,
+                )
+            )
+            for cluster in clusters_result.scalars().all():
+                cluster.fix_pr_state = "merged" if pr.get("merged") else "closed"
+            await db.commit()
 
     return {"received": True}
 

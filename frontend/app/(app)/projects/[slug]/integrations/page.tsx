@@ -4,6 +4,7 @@ import IntegrationsPanel, {
   type Project,
 } from "@/components/IntegrationsPanel";
 import { type GithubConfig } from "@/components/GitHubConfig";
+import { type AgentProvider } from "@/components/CodingAgentsConfig";
 import { PageTitle } from "@/components/PageTitle";
 
 interface ScoringConfig {
@@ -19,11 +20,12 @@ export default async function IntegrationsPage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
-  const [project, integrations, scoringConfig, githubConfig] = await Promise.all([
+  const [project, integrations, scoringConfig, githubConfig, agentProviders] = await Promise.all([
     apiServer<Project>(`/api/projects/${slug}`),
     apiServer<Integration[]>(`/api/projects/${slug}/integrations`),
     apiServer<ScoringConfig>(`/api/projects/${slug}/scoring-config`).catch(() => null),
     apiServer<GithubConfig>(`/api/projects/${slug}/github-config`).catch(() => null),
+    apiServer<AgentProvider[]>(`/api/projects/${slug}/agent-config`).catch(() => null),
   ]);
 
   const initialSimulatingTypes = [
@@ -42,6 +44,7 @@ export default async function IntegrationsPage({
           initialIntegrations={integrations}
           initialSimulatingTypes={initialSimulatingTypes}
           initialGithubConfig={githubConfig ?? undefined}
+          initialAgentProviders={agentProviders ?? undefined}
           appSlug={process.env.NEXT_PUBLIC_GITHUB_APP_SLUG ?? ""}
         />
       </div>
