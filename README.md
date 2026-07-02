@@ -19,6 +19,7 @@ Autopilot acts as a product manager that never sleeps: it reads every signal, li
 - **Files GitHub issues** — connect a repo and send any issue to your tracker, pre-written with full context
 - **Fixes with a coding agent** — trigger Claude Code, OpenAI Codex, or Gemini Code Assist on a filed issue with one click, and see the resulting PR linked back automatically
 - **Ask AI** — chat with the data to answer questions like "what's causing the most churn?" or "which users are affected by the checkout bug?"
+- **Every pipeline stage is independently addressable** — outbound webhooks let third parties react to a stage transition (cluster created, scored, issue filed, fix requested, PR linked, resolved) without polling, and a custom scoring webhook can replace the internal prioritization formula entirely
 
 ## Stack
 
@@ -187,6 +188,50 @@ This doesn't run any agent itself. Each provider is its own GitHub App/Action th
 Not using Claude/Codex/Gemini? Click **Add custom agent** in the same panel — any coding agent that watches GitHub issue comments and opens a PR works, since Autopilot only needs its name and trigger phrase. No code change or update required to support a new vendor.
 
 Autopilot doesn't verify the provider is actually installed on your repo — if nothing happens after triggering, double-check the provider's GitHub App/Action is set up and that its trigger phrase matches what Autopilot posted. Once the agent opens a PR that references the issue (e.g. `Fixes #123`), Autopilot links it back to the cluster and shows its state (open / merged / closed).
+
+## Webhooks (optional)
+
+Every pipeline stage — ingest, cluster, score, recommend, file issue, trigger fix — is independently addressable instead of being one closed flow. Outbound webhooks let a third party (a Slack notifier, a custom dashboard, an internal alerting tool) react to a stage transition without polling the REST API; a custom scoring plugin (below) lets a third party replace the scoring stage's logic entirely.
+
+### Outbound events
+
+1. In the app: go to **Integrations → Webhooks** → **Add webhook**
+2. Enter a URL and pick which events you want:
+   - `cluster.created` — a new cluster was formed
+   - `cluster.scored` — a cluster's priority score was (re)computed
+   - `cluster.issue_filed` — a GitHub issue was filed for a cluster (manual or Autopilot auto-file)
+   - `cluster.fix_requested` — a "Fix with…" trigger comment was posted
+   - `cluster.fix_pr_linked` — a fix PR was detected and linked back (open, merged, or closed)
+   - `cluster.resolved` — a cluster's status changed to resolved
+3. Copy the signing secret shown once at creation — you'll need it to verify deliveries
+
+Each delivery is a `POST` with the raw event as the body and two headers: `X-Autopilot-Event: <event type>` and `X-Autopilot-Signature: sha256=<hex>`, an HMAC-SHA256 of the body using your subscription's secret. Verify it before trusting the payload:
+
+```python
+import hashlib, hmac
+
+def verify(secret: str, body: bytes, signature_header: str) -> bool:
+    expected = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature_header)
+```
+
+Delivery is fire-and-forget and best-effort — a slow or dead endpoint never blocks or fails the pipeline stage that triggered it, and there's no retry queue. Use the **Send test event** button on a subscription to check it's reachable, and watch the "last delivery" status shown on each subscription for ongoing health.
+
+### Custom scoring plugin
+
+By default, priority score is `revenue_score × weight_revenue + frequency_score × weight_frequency + ux_score × weight_ux`, computed internally (**Settings → Prioritization**). To replace that with your own logic — e.g. factoring in ARR or account-tier data Autopilot doesn't have — set a scoring webhook URL in the same settings page. Autopilot POSTs the cluster's raw signal data (HMAC-signed, same scheme as above) and uses whatever your endpoint returns:
+
+```json
+{"revenue_score": 0.8, "frequency_score": 0.4, "ux_score": 0.2}
+```
+
+Autopilot still applies the project's configured weights to combine these three. To bypass the weights entirely, return `priority_score` directly instead:
+
+```json
+{"priority_score": 0.65}
+```
+
+On any failure — timeout, unreachable, malformed response — Autopilot falls back to the internal formula. A broken scoring plugin degrades gracefully; it never breaks clustering.
 
 ## Evaluating the product before connecting real integrations
 

@@ -8,6 +8,8 @@ interface ScoringConfig {
   weight_ux: number;
   max_revenue_usd: number;
   max_frequency_count: number;
+  scoring_webhook_url: string | null;
+  has_scoring_webhook_secret: boolean;
 }
 
 const DEFAULT_CONFIG: Omit<ScoringConfig, "project_id"> = {
@@ -16,6 +18,8 @@ const DEFAULT_CONFIG: Omit<ScoringConfig, "project_id"> = {
   weight_ux: 0.2,
   max_revenue_usd: 10000,
   max_frequency_count: 100,
+  scoring_webhook_url: null,
+  has_scoring_webhook_secret: false,
 };
 
 export default async function PrioritizationPage({

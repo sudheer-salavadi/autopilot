@@ -13,6 +13,7 @@ from app.models.event import Event
 from app.schemas.cluster import ClusterEventOut, ClusterOut, ClustersPage
 from app.services.evaluator import evaluate_project
 from app.services.outbox import enqueue_evaluation
+from app.services.webhook_dispatch import EVENT_CLUSTER_RESOLVED, cluster_payload, emit_event
 
 
 class ClusterStatusUpdate(BaseModel):
@@ -184,6 +185,9 @@ async def update_cluster_status(
 
     await db.commit()
     await db.refresh(cluster)
+
+    if body.status == ClusterStatus.resolved:
+        emit_event(project.id, EVENT_CLUSTER_RESOLVED, cluster_payload(cluster))
 
     out = ClusterOut.model_validate(cluster)
     out.event_ids = [ce.event_id for ce in cluster.cluster_events]

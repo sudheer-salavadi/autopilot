@@ -7,6 +7,7 @@ import {
   IconCircleFilled,
   IconRobot,
   IconServer,
+  IconWebhook,
 } from "@tabler/icons-react";
 import { cn } from "@/lib/utils";
 import { apiClient } from "@/lib/api";
@@ -15,6 +16,7 @@ import IntegrationPreview from "@/components/IntegrationPreview";
 import McpServerConfig from "@/components/McpServerConfig";
 import GitHubConfig, { type GithubConfig } from "@/components/GitHubConfig";
 import CodingAgentsConfig, { type AgentProvider } from "@/components/CodingAgentsConfig";
+import WebhooksConfig, { type WebhookSubscription } from "@/components/WebhooksConfig";
 
 export interface Integration {
   id: string;
@@ -41,6 +43,15 @@ const DEFAULT_GITHUB_CONFIG: GithubConfig = {
 };
 
 const DEFAULT_AGENT_PROVIDERS: AgentProvider[] = [];
+const DEFAULT_WEBHOOK_SUBSCRIPTIONS: WebhookSubscription[] = [];
+const DEFAULT_WEBHOOK_EVENT_TYPES: string[] = [
+  "cluster.created",
+  "cluster.scored",
+  "cluster.issue_filed",
+  "cluster.fix_requested",
+  "cluster.fix_pr_linked",
+  "cluster.resolved",
+];
 
 type CatalogEntry = {
   type: string;
@@ -93,6 +104,11 @@ const CATALOG: { group: string; items: CatalogEntry[] }[] = [
         label: "Coding Agents",
         icon: <IconRobot className="size-5" />,
       },
+      {
+        type: "webhooks",
+        label: "Webhooks",
+        icon: <IconWebhook className="size-5" />,
+      },
     ],
   },
 ];
@@ -139,6 +155,8 @@ export default function IntegrationsPanel({
   initialSimulatingTypes = [],
   initialGithubConfig,
   initialAgentProviders,
+  initialWebhookSubscriptions,
+  initialWebhookEventTypes,
   appSlug = "",
 }: {
   project: Project;
@@ -146,6 +164,8 @@ export default function IntegrationsPanel({
   initialSimulatingTypes?: string[];
   initialGithubConfig?: GithubConfig;
   initialAgentProviders?: AgentProvider[];
+  initialWebhookSubscriptions?: WebhookSubscription[];
+  initialWebhookEventTypes?: string[];
   appSlug?: string;
 }) {
   const [integrations, setIntegrations] = useState(initialIntegrations);
@@ -156,6 +176,9 @@ export default function IntegrationsPanel({
   );
   const agentProviders = initialAgentProviders ?? DEFAULT_AGENT_PROVIDERS;
   const agentsConnected = agentProviders.some((p) => p.enabled);
+  const webhookSubscriptions = initialWebhookSubscriptions ?? DEFAULT_WEBHOOK_SUBSCRIPTIONS;
+  const webhookEventTypes = initialWebhookEventTypes ?? DEFAULT_WEBHOOK_EVENT_TYPES;
+  const webhooksConnected = webhookSubscriptions.some((s) => s.enabled);
   const api = apiClient();
 
   const configuredMap = new Map(integrations.map((i) => [i.type, i]));
@@ -209,8 +232,15 @@ export default function IntegrationsPanel({
               const simulating = simulatingTypes.has(item.type);
               const isGithub = item.type === "github";
               const isCodingAgents = item.type === "coding_agents";
-              const hasOwnConnectedState = isGithub || isCodingAgents;
-              const connectedState = isGithub ? githubConnected : isCodingAgents ? agentsConnected : undefined;
+              const isWebhooks = item.type === "webhooks";
+              const hasOwnConnectedState = isGithub || isCodingAgents || isWebhooks;
+              const connectedState = isGithub
+                ? githubConnected
+                : isCodingAgents
+                ? agentsConnected
+                : isWebhooks
+                ? webhooksConnected
+                : undefined;
               return (
                 <button
                   key={item.type}
@@ -286,6 +316,20 @@ export default function IntegrationsPanel({
                   slug={project.slug}
                   initialProviders={agentProviders}
                   githubConnected={githubConnected}
+                />
+              </div>
+            );
+          }
+          if (item.type === "webhooks") {
+            return (
+              <div
+                key="webhooks"
+                className={cn("flex-1 overflow-y-auto p-6", !isVisible && "hidden")}
+              >
+                <WebhooksConfig
+                  slug={project.slug}
+                  initialSubscriptions={webhookSubscriptions}
+                  initialEventTypes={webhookEventTypes}
                 />
               </div>
             );

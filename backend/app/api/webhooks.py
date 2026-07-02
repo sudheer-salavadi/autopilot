@@ -15,6 +15,12 @@ from app.models.event import Event
 from app.models.github_config import ProjectGithubConfig
 from app.models.integration import Integration, IntegrationType
 from app.services.outbox import enqueue_evaluation
+from app.services.webhook_dispatch import (
+    EVENT_CLUSTER_FIX_PR_LINKED,
+    EVENT_CLUSTER_RESOLVED,
+    cluster_payload,
+    emit_event,
+)
 from app.services.webhooks import (
     verify_fullstory_webhook,
     verify_sentry_webhook,
@@ -251,6 +257,8 @@ async def github_app_webhook(
             cluster.status = ClusterStatus.investigating
 
         await db.commit()
+        if action == "closed":
+            emit_event(cluster.project_id, EVENT_CLUSTER_RESOLVED, cluster_payload(cluster))
 
     # ── pull_request: link a fix PR back to the cluster whose issue it closes ──
     if gh_event == "pull_request":
@@ -281,11 +289,14 @@ async def github_app_webhook(
                         Cluster.github_issue_number.in_(issue_numbers),
                     )
                 )
-                for cluster in clusters_result.scalars().all():
+                linked = clusters_result.scalars().all()
+                for cluster in linked:
                     cluster.fix_pr_number = pr_number
                     cluster.fix_pr_url = pr.get("html_url")
                     cluster.fix_pr_state = "open"
                 await db.commit()
+                for cluster in linked:
+                    emit_event(cluster.project_id, EVENT_CLUSTER_FIX_PR_LINKED, cluster_payload(cluster))
 
         elif action == "closed":
             clusters_result = await db.execute(
@@ -294,9 +305,12 @@ async def github_app_webhook(
                     Cluster.fix_pr_number == pr_number,
                 )
             )
-            for cluster in clusters_result.scalars().all():
+            closed_clusters = clusters_result.scalars().all()
+            for cluster in closed_clusters:
                 cluster.fix_pr_state = "merged" if pr.get("merged") else "closed"
             await db.commit()
+            for cluster in closed_clusters:
+                emit_event(cluster.project_id, EVENT_CLUSTER_FIX_PR_LINKED, cluster_payload(cluster))
 
     return {"received": True}
 
