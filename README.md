@@ -160,6 +160,8 @@ This doesn't run any agent itself. Each provider is its own GitHub App/Action th
 3. Optionally customize the trigger comment per provider — the defaults follow each vendor's documented convention, but exact syntax can vary by how a repo has it configured
 4. On any cluster with a filed GitHub issue, click **Fix with…** and pick a provider
 
+Not using Claude/Codex/Gemini? Click **Add custom agent** in the same panel — any coding agent that watches GitHub issue comments and opens a PR works, since Autopilot only needs its name and trigger phrase. No code change or update required to support a new vendor.
+
 Autopilot doesn't verify the provider is actually installed on your repo — if nothing happens after triggering, double-check the provider's GitHub App/Action is set up and that its trigger phrase matches what Autopilot posted. Once the agent opens a PR that references the issue (e.g. `Fixes #123`), Autopilot links it back to the cluster and shows its state (open / merged / closed).
 
 ## Evaluating the product before connecting real integrations
