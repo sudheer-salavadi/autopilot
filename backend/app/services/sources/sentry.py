@@ -72,10 +72,16 @@ def _is_negative(event: Event) -> bool:
     return level not in ("info", "unknown")
 
 
+def _identity(event: Event) -> str:
+    evt = event.payload.get("data", {}).get("event", {})
+    return str(evt.get("user", {}).get("email") or "")
+
+
 register(SourcePlugin(
     name="sentry",
     summarize=_summarize,
     ux_signal=_ux_signal,
     rich_line=_rich_line,
     is_negative=_is_negative,
+    identity=_identity,
 ))

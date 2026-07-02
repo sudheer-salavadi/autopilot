@@ -39,16 +39,80 @@ plugs into whatever stack a team already has, not by forcing them onto ours.
 3. ~~Generic scout interface~~ — done, see below
 4. ~~Open pipeline APIs / stage-level extensibility~~ — done, see below. Shipped ahead of #3 by explicit request.
 
-All four original roadmap items are now shipped. Next up, requested
-separately: an evaluation of the **clustering/scoring logic itself**
-(`services/evaluator.py`) — whether assign-vs-create decisions and the
-default priority formula actually produce correct groupings and correct
-"most critical first" ranking, not just whether the plumbing is pluggable.
-That work is being scoped in its own session/prompt rather than folded in
-here, deliberately sequenced *after* scouts: scouts add signal volume through
-the same clustering/scoring engine, so fixing that engine's correctness
-first means scouts (and every future signal source) inherit the fix for
-free, rather than needing re-validation once clustering changes land.
+All four original roadmap items are now shipped, and the follow-up
+evaluation of the **clustering/scoring logic itself** is done too — see
+"Shipped: clustering/scoring correctness pass" below and the full
+findings-and-reasoning write-up in `docs/clustering-evaluation.md`.
+
+## Shipped: clustering/scoring correctness pass
+
+**Why:** clustering + scoring is the core differentiated layer (the whole
+"own the middle" bet), but its internals had never been evaluated against
+how established systems (Sentry grouping/trends, PagerDuty alert grouping,
+Opsgenie dedup, leader/centroid online clustering) solve the same problems.
+The full evaluation — what was checked, what turned out to be a real defect
+vs. a non-issue, citations, and validation method — lives in
+`docs/clustering-evaluation.md`. Summary of what changed:
+
+- **Frequency score now decays** (7-day half-life, `0.5 ** (age_hours/168)`
+  summed per event) instead of using the all-time count — an issue that was
+  noisy three weeks ago no longer holds a maxed frequency_score forever.
+  Same principle as Sentry's trends sort. `max_frequency_count` keeps its
+  meaning ("this many recent events saturate the score").
+- **ux_score is the max member severity, not the mean** — averaging meant
+  corroborating low-severity events *diluted* urgency. Incident tools set
+  incident severity to the worst member alert; volume is frequency's job.
+- **Cluster embeddings are running centroids of member-event embeddings**
+  (standard online/leader clustering) and are no longer overwritten with a
+  title+root_cause embedding on every insight regeneration. All similarity
+  thresholds now compare event-style text against event-style text; this is
+  what made the 0.92 regression-detection threshold actually reachable.
+- **LLM tiebreaker sees the top-3 candidate clusters** (with event_count and
+  last_seen), not just the single nearest, and any candidate it picks is
+  accepted — previously the second-nearest cluster could never win and a
+  mismatched id silently created a duplicate.
+- **Batch-stall fix:** Zendesk solved/closed and Stripe refunded-status
+  events passed the SQL prefilter, failed the Python `is_negative` filter,
+  and were re-fetched forever — 50 of them would permanently stall a
+  project's clustering (LIMIT 50, oldest first). The plugins now export SQL
+  twins of those filters (same pattern as `POSITIVE_SQL`) and a full-batch
+  skip logs a warning.
+- **Duplicate-cluster flush bug:** a new cluster's embedding was assigned
+  after the INSERT flush and wasn't reliably visible to the next event's
+  pgvector query, so near-identical events in one batch could create
+  duplicate clusters. Embedding is now part of the INSERT; the loop flushes
+  per event.
+- **`SourcePlugin.identity()`** replaces the inline stripe/sentry/else
+  identity extraction that silently dropped Zendesk and scout events from
+  `affected_users`. Scout deliberately returns "" (aggregate findings have
+  no per-user identity).
+- **Scout severity is discounted** (critical→0.75, below Zendesk urgent 0.95
+  / rage-click 1.0 / Sentry error 0.8): it's the LLM's self-assessment with
+  no objective grounding, so it raises priority but can't dominate the
+  (now max-based) ux axis on its own.
+- **Insight context is explicitly recency-biased** (events fetched newest
+  first; the 15-event window was previously join-order-arbitrary), sources
+  are labeled correctly in the prompt (Zendesk/scout lines were shown under
+  a "FULLSTORY events:" heading), scout-only clusters get a signal line, and
+  the regeneration prompt instructs the model to keep the current
+  title/root_cause when still accurate (anti-flapping).
+- **Simulate-mode fix:** `demo.py` was missing `import json`, so cross-source
+  correlated generation always failed silently.
+
+**Deliberately not done:** no scoring-framework rewrite (linear weighted sum
+stays; the scoring webhook is the escape hatch), no threshold retuning
+without labeled data, no new config knobs. Thresholds 0.60/0.88/0.92 remain
+uncalibrated-but-now-comparing-like-with-like; revisit if/when real
+assign-vs-create decisions get sampled and labeled.
+
+**Validation:** real pgvector Postgres + deterministic stub OpenAI-compatible
+endpoint, 19 scenario assertions (known-correct groupings/rankings, decay,
+stall, regression linking, top-k assignment, simulate run) — all passing.
+No schema changes, so no new migration; single Alembic head remains `0020`.
+
+**Files touched:** `services/evaluator.py`, `services/sources/registry.py`,
+`services/sources/{stripe,sentry,fullstory,zendesk,scout}.py`,
+`services/demo.py`, `docs/clustering-evaluation.md` (new).
 
 ## Shipped: BYO LLM for the core pipeline
 
@@ -265,5 +329,13 @@ against individually.
   runs produce nothing. If a new scheduled check would create noise on
   every tick, it's not a scout, it's a sync interval; don't blur the two.
 - Before touching `services/evaluator.py`'s clustering/scoring logic, read
-  whatever session/prompt produced the clustering evaluation this doc
-  points to above — don't re-derive the analysis from scratch.
+  `docs/clustering-evaluation.md` — it records which suspected problems were
+  real (with evidence), which were non-issues, and which fixes were
+  deliberately *not* made. Don't re-derive the analysis from scratch, and
+  don't "fix" the deliberate omissions without new evidence.
+- Keep the plugin SQL twins in sync: if a source plugin's `is_negative` gains
+  a condition the evaluator's SQL prefilter can't see, non-negative events
+  pile up unclustered and eventually stall the project's 50-event evaluation
+  batch (there's a warning log when a full batch is skipped, but prevention
+  beats detection — export the condition as a SQL fragment like
+  `POSITIVE_SQL`/`RESOLVED_STATUS_SQL`).

@@ -123,10 +123,15 @@ def _is_negative(event: Event) -> bool:
     return frustration not in ("", "none")
 
 
+def _identity(event: Event) -> str:
+    return _user_identity(event.payload)
+
+
 register(SourcePlugin(
     name="fullstory",
     summarize=_summarize,
     ux_signal=_ux_signal,
     rich_line=_rich_line,
     is_negative=_is_negative,
+    identity=_identity,
 ))

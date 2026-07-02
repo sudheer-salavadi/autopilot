@@ -45,6 +45,11 @@ _POSITIVE_STATUSES: frozenset[str] = frozenset({
     "paid", "succeeded", "active", "trialing", "complete", "refunded",
 })
 
+# Same statuses as a SQL IN () fragment, so the evaluator's SQL prefilter and
+# the Python is_negative check below can never diverge (a divergence leaves
+# events permanently unclustered — see evaluate_project's batch fetch).
+POSITIVE_STATUS_SQL: str = ", ".join(f"'{s}'" for s in sorted(_POSITIVE_STATUSES))
+
 # ── Plugin functions ───────────────────────────────────────────────────────────
 
 def _summarize(event: Event, cross_channel: bool = True) -> str:
@@ -89,6 +94,15 @@ def _is_negative(event: Event) -> bool:
     return True
 
 
+def _identity(event: Event) -> str:
+    obj = event.payload.get("data", {}).get("object", {})
+    return str(
+        obj.get("customer")
+        or (obj.get("metadata") or {}).get("email")
+        or ""
+    )
+
+
 # ── Registration ───────────────────────────────────────────────────────────────
 
 register(SourcePlugin(
@@ -97,4 +111,5 @@ register(SourcePlugin(
     ux_signal=_ux_signal,
     rich_line=_rich_line,
     is_negative=_is_negative,
+    identity=_identity,
 ))

@@ -40,6 +40,11 @@ class SourcePlugin:
     # True only for events that represent a problem worth clustering
     is_negative: Callable[["Event"], bool]
 
+    # Stable user/customer identifier for affected-user counting and
+    # cross-source correlation. Return "" when the event has no per-user
+    # identity (e.g. aggregate findings).
+    identity: Callable[["Event"], str] = lambda event: ""
+
 
 def register(plugin: SourcePlugin) -> None:
     """Register a source plugin.  Called at import time by each source module."""
