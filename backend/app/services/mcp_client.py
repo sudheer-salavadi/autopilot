@@ -56,6 +56,36 @@ async def discover_tools(
             ]
 
 
+async def call_mcp_tool(
+    server_url: str,
+    tool_name: str,
+    arguments: dict | None = None,
+    auth_type: str = "none",
+    auth_value: str | None = None,
+    auth_header_name: str | None = None,
+) -> dict:
+    """Connect to an MCP server and call a single tool with arguments.
+
+    Used by scouts (services/scouts.py) — a one-off, single-tool call, unlike
+    pull_mcp_server's one-session-many-tools bulk poll. Raises on connection
+    or tool-call failure; callers decide how to handle it (scouts record the
+    error on the ProjectScout row rather than propagating it).
+    """
+    from mcp import ClientSession
+    from mcp.client.streamable_http import streamablehttp_client
+
+    headers = _build_headers(auth_type, auth_value, auth_header_name)
+    async with streamablehttp_client(server_url, headers=headers) as (read, write, _):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.call_tool(tool_name, arguments or {})
+            return {
+                "tool": tool_name,
+                "content": [_serialize_content(c) for c in result.content],
+                "is_error": bool(result.isError),
+            }
+
+
 async def pull_mcp_server(
     server_url: str,
     selected_tools: list[str],

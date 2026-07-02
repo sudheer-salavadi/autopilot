@@ -13,6 +13,7 @@ Autopilot acts as a product manager that never sleeps: it reads every signal, li
 ## What it does
 
 - **Ingests events via webhook** from Stripe, Sentry, FullStory, and Zendesk — or connects any **MCP-compatible server** to pull events on a schedule (no public webhook URL required)
+- **Proactively scouts for problems**, not just reactive ingestion — a scout calls an MCP tool on a schedule and only surfaces an issue when an LLM decides the result is a genuine finding against an objective you write
 - **Clusters events by root cause**, not by source — a Stripe payment failure, a Sentry exception, and a FullStory rage-click from the same checkout flow become one issue, not three alerts
 - **Scores every issue by business impact** — revenue at risk, frequency, and UX friction signals, weighted however you choose
 - **Explains root cause and recommends a fix** — see affected users, cross-source signal breakdown, and a suggested next step
@@ -147,6 +148,20 @@ In the app: **Integrations → MCP Server**
 3. Click **Discover tools** to fetch the available tool list
 4. Select which tools to poll and set the sync interval (5 min / 15 min / 1 hour)
 5. Save — Autopilot pulls on schedule and deduplicates results automatically
+
+### Scouts — proactive checks (optional)
+
+Regular sync above mirrors every selected tool's result into an event, unconditionally, on a shared schedule. A **scout** is different: it calls one tool with fixed arguments on its own schedule, and only creates an issue when an LLM decides the result is a genuine finding against an objective you write — most runs should produce nothing. This is proactive detection layered on top of a connected MCP server, not a replacement for plain sync.
+
+In the app: **Integrations → MCP Server**, once a server is connected, under **Scouts**:
+
+1. Click **Add scout**
+2. Name it, pick (or type) the tool to call, and optionally set fixed arguments as JSON
+3. Write an objective in plain language — e.g. *"Flag it if the error rate is meaningfully above normal for this time of day"*
+4. Set a check interval (5 min / 15 min / 1 hour)
+5. Use **Run now** any time to test it immediately and see whether it found something
+
+Every scout run is evaluated against its objective by the same AI model configured above (**AI model configuration**) — no cloud dependency beyond whatever you already configured there. A scout that finds something creates a normal event (`source: scout`) that flows through the same clustering, scoring, and prioritization pipeline as everything else; a scout that finds nothing does nothing, so scouts don't add noise even running every 5 minutes.
 
 ## GitHub integration (optional)
 
