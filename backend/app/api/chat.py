@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import require_project_member
 from app.db.session import get_db
 from app.models.cluster import Cluster, ClusterStatus
-from app.services.demo import ai_chat
+from app.services.llm import ai_chat
 from app.services.evaluator import _generate_embedding
 from sqlalchemy import select
 

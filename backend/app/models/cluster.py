@@ -8,6 +8,7 @@ from sqlalchemy import DateTime, Enum, Float, ForeignKey, Integer, String, Uniqu
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.config import settings
 from app.db.base import Base
 
 
@@ -48,8 +49,12 @@ class Cluster(Base):
         Enum(ClusterStatus), nullable=False, default=ClusterStatus.open
     )
 
-    # Semantic embedding (text-embedding-3-small, 1536 dims) for regression detection
-    embedding: Mapped[list[float] | None] = mapped_column(Vector(1536), nullable=True)
+    # Semantic embedding for regression detection. Dimension is deployment-
+    # configurable (AI_EMBEDDING_DIMS) to match whatever embedding model is
+    # configured — see app.services.llm and alembic/versions/0018.
+    embedding: Mapped[list[float] | None] = mapped_column(
+        Vector(settings.AI_EMBEDDING_DIMS), nullable=True
+    )
 
     # Regression tracking — parent_cluster_id links back to the original resolved cluster
     parent_cluster_id: Mapped[uuid.UUID | None] = mapped_column(

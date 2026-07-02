@@ -6,6 +6,7 @@ from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.config import settings
 from app.db.base import Base
 
 
@@ -32,8 +33,12 @@ class Event(Base):
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
-    # Pre-computed embedding stored at evaluation time to avoid per-event API calls
-    embedding: Mapped[list[float] | None] = mapped_column(Vector(1536), nullable=True)
+    # Pre-computed embedding stored at evaluation time to avoid per-event API calls.
+    # Dimension is deployment-configurable (AI_EMBEDDING_DIMS) to match whatever
+    # embedding model is configured — see app.services.llm and alembic/versions/0018.
+    embedding: Mapped[list[float] | None] = mapped_column(
+        Vector(settings.AI_EMBEDDING_DIMS), nullable=True
+    )
 
     # Relationships
     project: Mapped["Project"] = relationship("Project", back_populates="events")  # noqa: F821
