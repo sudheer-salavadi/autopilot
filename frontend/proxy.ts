@@ -1,9 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server";
 
 // Public paths that don't require authentication
-const PUBLIC_PATHS = ["/", "/auth/callback"];
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const PUBLIC_PATHS = ["/", "/login"];
 
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -19,8 +17,8 @@ export function proxy(request: NextRequest) {
 
   const session = request.cookies.get("ap_session");
 
-  // Logged-in users hitting the landing page go straight to dashboard
-  if (pathname === "/" && session) {
+  // Logged-in users hitting the landing or login page go straight to dashboard
+  if ((pathname === "/" || pathname === "/login") && session) {
     return NextResponse.redirect(new URL("/dashboard", request.url));
   }
 
@@ -31,7 +29,7 @@ export function proxy(request: NextRequest) {
 
   // Gate all other routes
   if (!session) {
-    return NextResponse.redirect(`${API_URL}/api/auth/login`);
+    return NextResponse.redirect(new URL("/login", request.url));
   }
 
   return NextResponse.next();

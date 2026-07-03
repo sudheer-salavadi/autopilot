@@ -12,12 +12,13 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str
 
-    # Skip WorkOS authentication — dev/evaluation only, never in production
+    # Skip authentication — dev/evaluation only, never in production.
+    # Every request runs as a shared local "Dev User".
     SKIP_AUTH: bool = False
 
-    # WorkOS — required when SKIP_AUTH=false
-    WORKOS_API_KEY: str = ""
-    WORKOS_CLIENT_ID: str = ""
+    # Block new account registration (e.g. once your team has signed up on a
+    # deployed instance). Existing accounts keep working.
+    DISABLE_SIGNUP: bool = False
 
     # Session & encryption — required when SKIP_AUTH=false; insecure defaults for dev
     SESSION_SECRET_KEY: str = _DEV_SESSION_KEY
@@ -49,7 +50,6 @@ class Settings(BaseSettings):
 
     # URLs
     FRONTEND_URL: str = "http://localhost:3000"
-    NEXT_PUBLIC_WORKOS_REDIRECT_URI: str = "http://localhost:8000/api/auth/callback"
 
     # GitHub App (optional — PAT-based fallback still works without these)
     GITHUB_APP_ID: str = ""
@@ -67,16 +67,6 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def check_auth_config(self) -> "Settings":
         if not self.SKIP_AUTH:
-            if not self.WORKOS_API_KEY:
-                raise ValueError(
-                    "WORKOS_API_KEY is required. "
-                    "Set SKIP_AUTH=true to run without WorkOS (development only)."
-                )
-            if not self.WORKOS_CLIENT_ID:
-                raise ValueError(
-                    "WORKOS_CLIENT_ID is required. "
-                    "Set SKIP_AUTH=true to run without WorkOS (development only)."
-                )
             if self.SESSION_SECRET_KEY == _DEV_SESSION_KEY:
                 raise ValueError(
                     "SESSION_SECRET_KEY must be set to a secure value. "

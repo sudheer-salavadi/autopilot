@@ -46,12 +46,14 @@ async def invite_member(
 ):
     project, _, __ = deps
 
-    user_result = await db.execute(select(User).where(User.email == body.email))
+    user_result = await db.execute(
+        select(User).where(User.email == body.email.strip().lower())
+    )
     invited_user = user_result.scalar_one_or_none()
     if not invited_user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found — they must log in first",
+            detail="User not found — they must sign up first",
         )
 
     existing = await db.execute(

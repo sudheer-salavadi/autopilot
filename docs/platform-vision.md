@@ -30,7 +30,7 @@ plugs into whatever stack a team already has, not by forcing them onto ours.
 | **LLM for the core pipeline** | BYO model for clustering/scoring/embeddings/Ask AI | Done — `services/llm.py` resolves `AI_BASE_URL` (any OpenAI-compatible endpoint: LM Studio, Ollama, vLLM, OpenRouter, ...) first, `OPENAI_API_KEY` as the zero-config default, Gemini as failure-only fallback. Embedding model + vector dimension configurable via `AI_EMBEDDING_MODEL`/`AI_EMBEDDING_DIMS`. |
 | **Proactive scouts** | Generic scheduled-probe interface, not just reactive webhooks | Done — `services/scouts.py` + `ProjectScout`: a named check against one MCP tool, own schedule, own LLM-evaluated objective. Only creates an event when there's a genuine finding, unlike plain MCP sync which mirrors everything. See below. |
 | **Open pipeline APIs** | Each stage (ingest/cluster/score/recommend/file/fix) independently addressable by third parties | Done — outbound webhooks on every stage transition (`services/webhook_dispatch.py`) plus a pluggable scoring webhook that can replace the score stage's logic entirely. See below. |
-| **Self-hosting** | No forced cloud dependency | Done — Docker Compose, `SKIP_AUTH=true` for zero-config local runs. |
+| **Self-hosting** | No forced cloud dependency | Done — Docker Compose, `SKIP_AUTH=true` for zero-config local runs, and auth is now fully in-app (email/password + bcrypt + JWT cookie; WorkOS removed — it was the last mandatory third-party service for real deployments). See below. |
 
 ## Roadmap (priority order, as of 2026-07-02)
 
@@ -43,6 +43,50 @@ All four original roadmap items are now shipped, and the follow-up
 evaluation of the **clustering/scoring logic itself** is done too — see
 "Shipped: clustering/scoring correctness pass" below and the full
 findings-and-reasoning write-up in `docs/clustering-evaluation.md`.
+
+## Shipped: self-contained auth (WorkOS removed)
+
+**Why:** WorkOS was the last third-party service a real (non-`SKIP_AUTH`)
+deployment couldn't run without — an account to create, API keys, a redirect
+URI, and a hosted login page in the middle of a product whose whole pitch is
+"self-hosted, bring your own everything." For an open-source product the
+auth system should need nothing but the app's own database.
+
+**Design:**
+- Email + password, bcrypt-hashed (`bcrypt` lib directly, no passlib),
+  reusing the JWT `ap_session` cookie machinery that already existed —
+  WorkOS was only supplying the identity step, so the session layer,
+  `get_current_user`, and all authorization code are unchanged.
+- Backend-owned, not NextAuth: authorization happens in FastAPI, so FastAPI
+  owns login too. The frontend gained one page (`/login`, signup + signin)
+  and the middleware now redirects unauthenticated users there instead of
+  to the removed WorkOS flow.
+- `GET /api/auth/login` stays as the browser entry point: `SKIP_AUTH=true`
+  → dev-user cookie + dashboard (unchanged evaluation path); otherwise →
+  redirect to `/login`. Landing/sidebar links needed no changes.
+- `DISABLE_SIGNUP=true` locks registration once a team is onboarded.
+- Login is enumeration-resistant (unknown email burns the same bcrypt check
+  as a wrong password; both return the same generic 401). Users with
+  `password_hash IS NULL` (the dev user) can never authenticate by password.
+- Migration `0021` drops `users.workos_user_id`, adds `password_hash`
+  (nullable), makes `email` unique (it's the login identifier now).
+- **No password-reset flow, deliberately** — that would drag in an SMTP
+  dependency. The operator resets a hash via SQL (documented in README and
+  in the migration docstring). Revisit only if real users ask.
+
+**Validation:** 13 curl-level checks (signup/dup/weak-password/bad-email/
+wrong-password/unknown-email/me/logout/gating/redirects), DISABLE_SIGNUP
+and SKIP_AUTH modes, NULL-hash login rejection, plus a 6-step Playwright
+browser run through the real form (signup → dashboard → logout → gated →
+wrong password error → login). Frontend production build passes.
+
+**Files touched:** `services/auth.py`, `api/auth.py`, `api/deps.py`,
+`api/members.py`, `models/user.py`, `config.py`, `requirements.txt`
+(`workos` out; `bcrypt`, `email-validator` in),
+`alembic/versions/0021_local_auth.py` (new), `frontend/app/login/page.tsx`
+(new), `frontend/proxy.ts`, `frontend/app/auth/` (removed),
+`frontend/package.json` (`@workos-inc/authkit-nextjs` removed), README,
+`.env.example`.
 
 ## Shipped: clustering/scoring correctness pass
 

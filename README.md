@@ -46,7 +46,7 @@ To be fair to both: if your whole stack already runs on PostHog's SDKs, their In
 |---|---|
 | Backend | FastAPI, SQLAlchemy 2.0, Alembic, PostgreSQL + pgvector |
 | Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS v4 |
-| Auth | WorkOS |
+| Auth | Built in — email + password (bcrypt) with JWT session cookies, no external identity provider |
 | AI | Bring your own model (any OpenAI-compatible endpoint) — OpenAI is the zero-config default, Gemini an optional failure fallback |
 | Deployment | Docker Compose |
 
@@ -55,12 +55,13 @@ To be fair to both: if your whole stack already runs on PostHog's SDKs, their In
 ### Prerequisites
 
 - Docker and Docker Compose
-- A [WorkOS](https://workos.com) account (free tier works — used for auth) **or** use `SKIP_AUTH=true` to skip auth entirely (see below)
 - A model for clustering, scoring, embeddings, and Ask AI — **any** OpenAI-compatible endpoint works (LM Studio, Ollama, vLLM, OpenRouter, ...), or an OpenAI API key as the zero-config default. See **AI model configuration** below.
 
-### Quickest start — no WorkOS account needed
+That's the whole list. Auth is built in (email + password) — there is no identity provider to sign up for and no OAuth app to register.
 
-Set `SKIP_AUTH=true` in your `.env` to bypass authentication completely. A "Dev User" is created automatically on first request — no WorkOS signup, no session keys to generate.
+### Quickest start — skip auth entirely
+
+Set `SKIP_AUTH=true` in your `.env` to bypass authentication completely while evaluating. A "Dev User" is created automatically on first request — no accounts, no session keys to generate.
 
 ```bash
 cp .env.example .env
@@ -73,7 +74,7 @@ docker compose exec backend alembic upgrade head
 
 > **Never use `SKIP_AUTH=true` in production.** All requests run as the same shared user with no access control.
 
-### Full setup with WorkOS auth
+### Full setup with accounts
 
 ### 1. Configure environment
 
@@ -85,33 +86,26 @@ Edit `.env` and fill in:
 
 | Variable | Where to get it |
 |---|---|
-| `WORKOS_API_KEY` | WorkOS dashboard → API Keys |
-| `WORKOS_CLIENT_ID` | WorkOS dashboard → Applications |
-| `WORKOS_COOKIE_PASSWORD` | Generate: `openssl rand -hex 32` |
 | `SESSION_SECRET_KEY` | Generate: `openssl rand -hex 32` |
 | `ENCRYPTION_KEY` | Generate: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
 | `OPENAI_API_KEY` | [platform.openai.com](https://platform.openai.com) |
 
-WorkOS setup:
-1. Create an application in the WorkOS dashboard
-2. Set the redirect URI to `http://localhost:8000/api/auth/callback`
-3. Enable the "AuthKit" sign-in method
-
-### 2. Start services
+### 2. Start services and run migrations (first run only)
 
 ```bash
 docker compose up
-```
-
-### 3. Run migrations (first run only)
-
-```bash
 docker compose exec backend alembic upgrade head
 ```
 
-### 4. Open the app
+### 3. Create your account
 
-Visit `http://localhost:3000`
+Visit `http://localhost:3000`, click **Get started**, and create the first account — email and password, stored in your own database (bcrypt-hashed). Teammates sign up the same way, then a project owner adds them under **Settings → Members**.
+
+Once everyone's in, you can lock registration with `DISABLE_SIGNUP=true` — existing accounts keep working, new signups are rejected.
+
+> **Note on password resets:** there is deliberately no email-based reset flow (that would require configuring an SMTP dependency). If someone is locked out, the operator sets a new hash directly: `docker compose exec backend python -c "import bcrypt; print(bcrypt.hashpw(b'newpassword', bcrypt.gensalt()).decode())"` then `UPDATE users SET password_hash='<hash>' WHERE email='<email>';`
+
+> **Upgrading from a WorkOS-based install?** Existing users keep their projects but have no password yet — set one per user with the same SQL as above (signing up again with the same email is blocked by the unique constraint).
 
 ## AI model configuration
 
