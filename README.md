@@ -105,12 +105,16 @@ Visit `http://localhost:3000`, click **Get started**, and create the first accou
 
 Two independent levels:
 
-- **Instance roles** (`admin` / `member`): admins get a **Team & access** panel to list users, create accounts directly (with a starting password), change roles, reset passwords, and delete users. Guardrails: the last admin can't be demoted or deleted, and a user who owns projects can't be deleted until those projects are.
+- **Instance roles** (`admin` / `member`): admins get **Settings → Team & access** to list users, create accounts directly (with a starting password), change roles, reset passwords, and delete users. Guardrails: the last admin can't be demoted or deleted, and a user who owns projects can't be deleted until those projects are.
 - **Project roles** (`owner` / `member`): unchanged — every project is invisible to non-members, owners manage membership and settings under **Settings → Team**. Being an instance admin does *not* grant access to project data; admins manage accounts, not your signals.
 
 Typical flow: teammates sign up themselves (or an admin creates their accounts), then a project owner invites them by email. Once everyone's in, lock registration with `DISABLE_SIGNUP=true` — existing accounts keep working, and the first-account bootstrap still works on a fresh install so you can't lock yourself out.
 
-Password resets are admin-driven (**Team & access → key icon**) — deliberately no email-based reset flow, so there's no SMTP dependency. Users change their own password under **Settings → Account**.
+Password resets are admin-driven (**Settings → Team & access → key icon**) — deliberately no email-based reset flow, so there's no SMTP dependency. Users change their own password under **Settings → Account**.
+
+**Audit trail instead of granular permissions:** any project member can file issues and trigger coding agents, and every outward-facing action — GitHub issue filed (manually or by Autopilot), coding agent triggered, status changed, member added/removed — is recorded with who did it under **Settings → Activity**. Instance-admin actions (user created/deleted, role changed, password reset) appear under **Settings → Team & access**.
+
+**Login protection:** failed logins are rate-limited per account (10 per 15 minutes, cleared on success) and per IP, and signups per IP — brute-forcing a password returns `429` long before it becomes viable. Limits are in-memory per backend process, which is exact for the default single-process Docker deployment.
 
 > **Upgrading from a WorkOS-based install?** Existing users keep their projects but have no password yet — the earliest-created account is backfilled as admin; set its password once via SQL (`docker compose exec backend python -c "import bcrypt; print(bcrypt.hashpw(b'newpassword', bcrypt.gensalt()).decode())"` then `UPDATE users SET password_hash='<hash>' WHERE email='<email>';`), then reset everyone else's from the admin panel.
 

@@ -37,6 +37,7 @@ from app.db.session import AsyncSessionLocal
 from app.models.cluster import Cluster, ClusterEvent
 from app.models.event import Event
 from app.models.scoring_config import ProjectScoringConfig
+from app.services import audit
 from app.services.llm import ai_chat, _parse_json, embedding_client
 from app.services.webhook_dispatch import (
     EVENT_CLUSTER_CREATED,
@@ -1248,6 +1249,16 @@ async def _autopilot_github(
                         # Link the regression cluster to the reopened issue
                         cluster.github_issue_number = parent.github_issue_number
                         cluster.github_issue_url = parent.github_issue_url
+                        audit.record(
+                            db,
+                            action="cluster.issue_filed",
+                            actor_email=audit.SYSTEM_ACTOR,
+                            project_id=project_id,
+                            target_type="cluster",
+                            target_id=cluster.id,
+                            summary=f"Reopened {gh_config.repo}#{parent.github_issue_number} "
+                            f'(regression of "{parent.title}")',
+                        )
                         await db.commit()
                         emit_event(project_id, EVENT_CLUSTER_ISSUE_FILED, cluster_payload(cluster))
                     except Exception:
@@ -1278,6 +1289,17 @@ async def _autopilot_github(
             from app.models.cluster import ClusterStatus
             if cluster.status == ClusterStatus.open:
                 cluster.status = ClusterStatus.investigating
+            audit.record(
+                db,
+                action="cluster.issue_filed",
+                actor_email=audit.SYSTEM_ACTOR,
+                project_id=project_id,
+                target_type="cluster",
+                target_id=cluster.id,
+                summary=f'Auto-filed {gh_config.repo}#{issue["number"]} for '
+                f'"{cluster.title}" (score {cluster.priority_score:.2f} ≥ '
+                f"threshold {gh_config.autopilot_min_score:.2f})",
+            )
             await db.commit()
             emit_event(project_id, EVENT_CLUSTER_ISSUE_FILED, cluster_payload(cluster))
         except Exception:

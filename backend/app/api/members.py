@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, require_project_member, require_project_owner
 from app.db.session import get_db
+from app.services import audit
 from app.models.project import ProjectMember
 from app.models.user import User
 from app.schemas.project import MemberInvite, MemberOut
@@ -44,7 +45,7 @@ async def invite_member(
     deps=Depends(require_project_owner),
     db: AsyncSession = Depends(get_db),
 ):
-    project, _, __ = deps
+    project, current_user, __ = deps
 
     user_result = await db.execute(
         select(User).where(User.email == body.email.strip().lower())
@@ -69,6 +70,15 @@ async def invite_member(
         project_id=project.id, user_id=invited_user.id, role=body.role
     )
     db.add(membership)
+    audit.record(
+        db,
+        action="member.added",
+        actor=current_user,
+        project_id=project.id,
+        target_type="user",
+        target_id=invited_user.id,
+        summary=f"Added {invited_user.email} as {body.role.value}",
+    )
     await db.flush()
     return MemberOut(
         id=membership.id,
@@ -102,4 +112,14 @@ async def remove_member(
     if not membership:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Member not found")
 
+    removed_user = await db.get(User, user_id)
+    audit.record(
+        db,
+        action="member.removed",
+        actor=current_user,
+        project_id=project.id,
+        target_type="user",
+        target_id=user_id,
+        summary=f"Removed {removed_user.email if removed_user else user_id}",
+    )
     await db.delete(membership)

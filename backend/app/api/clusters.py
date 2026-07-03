@@ -8,9 +8,11 @@ from sqlalchemy.orm import selectinload
 
 from app.api.deps import require_project_member, require_project_owner
 from app.db.session import get_db
+from app.models.audit import AuditLog
 from app.models.cluster import Cluster, ClusterEvent, ClusterStatus
 from app.models.event import Event
 from app.schemas.cluster import ClusterEventOut, ClusterOut, ClustersPage
+from app.services import audit
 from app.services.evaluator import evaluate_project
 from app.services.outbox import enqueue_evaluation
 from app.services.webhook_dispatch import EVENT_CLUSTER_RESOLVED, cluster_payload, emit_event
@@ -143,7 +145,7 @@ async def update_cluster_status(
     deps=Depends(require_project_member),
     db: AsyncSession = Depends(get_db),
 ):
-    project, _, _ = deps
+    project, current_user, _ = deps
 
     result = await db.execute(
         select(Cluster)
@@ -154,7 +156,18 @@ async def update_cluster_status(
     if not cluster:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cluster not found")
 
+    previous_status = cluster.status
     cluster.status = body.status
+    if body.status != previous_status:
+        audit.record(
+            db,
+            action="cluster.status_changed",
+            actor=current_user,
+            project_id=project.id,
+            target_type="cluster",
+            target_id=cluster.id,
+            summary=f'"{cluster.title}": {previous_status.value} → {body.status.value}',
+        )
 
     # Sync GitHub issue state when status changes to/from resolved
     if cluster.github_issue_number:
@@ -192,6 +205,33 @@ async def update_cluster_status(
     out = ClusterOut.model_validate(cluster)
     out.event_ids = [ce.event_id for ce in cluster.cluster_events]
     return out
+
+
+@router.get("/audit")
+async def project_audit(
+    deps=Depends(require_project_member),
+    db: AsyncSession = Depends(get_db),
+):
+    """Recent activity for this project: who filed, triggered, resolved what."""
+    project, _, _ = deps
+    result = await db.execute(
+        select(AuditLog)
+        .where(AuditLog.project_id == project.id)
+        .order_by(AuditLog.created_at.desc())
+        .limit(100)
+    )
+    return [
+        {
+            "id": str(e.id),
+            "actor_email": e.actor_email,
+            "action": e.action,
+            "target_type": e.target_type,
+            "target_id": e.target_id,
+            "summary": e.summary,
+            "created_at": e.created_at.isoformat(),
+        }
+        for e in result.scalars().all()
+    ]
 
 
 @router.post("/clusters/evaluate")
