@@ -13,9 +13,11 @@ class User(Base, TimestampMixin):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    workos_user_id: Mapped[str] = mapped_column(String, unique=True, nullable=False)
-    email: Mapped[str] = mapped_column(String, nullable=False)
+    email: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
     name: Mapped[str] = mapped_column(String, nullable=False, default="")
+    # bcrypt hash. Nullable: the SKIP_AUTH dev user has no password and can
+    # never log in through the password endpoint.
+    password_hash: Mapped[str | None] = mapped_column(String, nullable=True)
 
     # Relationships
     owned_projects: Mapped[list["Project"]] = relationship(  # noqa: F821

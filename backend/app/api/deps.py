@@ -8,14 +8,15 @@ from app.models.project import MemberRole, Project, ProjectMember
 from app.models.user import User
 from app.services.auth import verify_session_token
 
-_DEV_WORKOS_ID = "dev_local_user"
+_DEV_USER_EMAIL = "dev@localhost"
 
 
 async def _get_or_create_dev_user(db: AsyncSession) -> User:
-    result = await db.execute(select(User).where(User.workos_user_id == _DEV_WORKOS_ID))
+    """The shared no-password user every request runs as when SKIP_AUTH=true."""
+    result = await db.execute(select(User).where(User.email == _DEV_USER_EMAIL))
     user = result.scalar_one_or_none()
     if not user:
-        user = User(workos_user_id=_DEV_WORKOS_ID, email="dev@localhost", name="Dev User")
+        user = User(email=_DEV_USER_EMAIL, name="Dev User", password_hash=None)
         db.add(user)
         await db.flush()
     return user
