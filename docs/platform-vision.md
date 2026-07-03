@@ -44,6 +44,67 @@ evaluation of the **clustering/scoring logic itself** is done too — see
 "Shipped: clustering/scoring correctness pass" below and the full
 findings-and-reasoning write-up in `docs/clustering-evaluation.md`.
 
+## Shipped: audit trail + login rate-limiting (and Team & access moved into Settings)
+
+**Why:** the two follow-ups explicitly prioritized ahead of granular RBAC
+when instance roles shipped (see the "Deliberately NOT built" note in the
+RBAC section below): accountability for outward-facing actions, and
+protection for the now-self-hosted password login. Granular per-action
+permissions remain rejected without concrete scenarios — the user agreed.
+
+**Audit trail (`audit_log` table, migration `0023`):**
+- `services/audit.py`'s `record()` appends to the caller's transaction, so
+  an entry commits/rolls back atomically with the action it describes, and
+  never raises — auditing must not break the audited action.
+- Recorded: `cluster.issue_filed` (manual and Autopilot's auto-filing with
+  the score/threshold that triggered it, actor "autopilot"),
+  `cluster.fix_requested` (which agent, which issue),
+  `cluster.status_changed` (old → new; no entry when status is unchanged),
+  `member.added`/`member.removed`, and instance-level `user.created`/
+  `user.role_changed`/`user.password_reset`/`user.deleted` (project_id
+  NULL).
+- Read surfaces: `GET /api/projects/{slug}/audit` (members) shown in
+  **Settings → Activity**; `GET /api/admin/audit` (admins) shown inline on
+  **Settings → Team & access**. actor_email is snapshotted so entries stay
+  readable after a user is deleted.
+
+**Login rate-limiting (`services/rate_limit.py`):**
+- Sliding-window, in-memory, per-process — deliberate: the default deploy
+  is one uvicorn process, and horizontal scaling only multiplies the limit
+  by process count, which still bounds brute force. Swap for Redis only if
+  that stops being true.
+- Failed logins: 10/15min per account (cleared by a successful login) and
+  30/15min per IP; signups 10/hour per IP; change-password failures share
+  the account window so a hijacked session can't brute-force the current
+  password. Blocked requests get 429 + Retry-After.
+- X-Forwarded-For is honored for the IP key (needed behind a reverse
+  proxy); per-account keys don't depend on it, so spoofing only weakens
+  the coarse per-IP ceiling, never the account lockout.
+
+**Settings move:** the admin panel left the sidebar (`/admin` removed) and
+became **Settings → Team & access** (`settings/access`), a tab rendered
+only for instance admins — direct navigation by non-admins still gets the
+role-required message from the component itself. New **Settings →
+Activity** tab (`settings/activity`) for the project audit trail.
+
+**Validation:** rate limits verified live (lockout after 10 failures incl.
+correct-password-while-locked, other accounts unaffected, Retry-After
+header, success-resets-window, signup cap), audit entries verified for
+member add/remove, status change (incl. no-op suppression), and all four
+admin actions, permission checks on both read endpoints (403 for
+non-member / non-admin), 6-step Playwright run over the new tabs, frontend
+production build, single Alembic head (`0023`).
+
+**Files touched:** `models/audit.py` (new), `services/audit.py` (new),
+`services/rate_limit.py` (new), `alembic/versions/0023_audit_log.py` (new),
+`alembic/env.py`, `api/auth.py`, `api/admin.py`, `api/clusters.py`,
+`api/members.py`, `api/agent_config.py`, `api/github_config.py`,
+`services/evaluator.py`, `components/InstanceAccess.tsx` (moved from
+`app/(app)/admin/page.tsx`), `components/ProjectActivity.tsx` (new),
+`components/SettingsTabs.tsx`, `components/AppSidebar.tsx`,
+`settings/layout.tsx`, `settings/access/page.tsx` (new),
+`settings/activity/page.tsx` (new), README.
+
 ## Shipped: instance RBAC (first-account admin + user management)
 
 **Why:** after auth became self-contained there was still no instance-level

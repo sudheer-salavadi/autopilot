@@ -13,8 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_admin
 from app.db.session import get_db
+from app.models.audit import AuditLog
 from app.models.project import Project, ProjectMember
 from app.models.user import User, UserRole
+from app.services import audit
 from app.services.auth import (
     MAX_PASSWORD_BYTES,
     MIN_PASSWORD_LENGTH,
@@ -107,7 +109,11 @@ async def list_users(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/users", status_code=status.HTTP_201_CREATED)
-async def create_user(body: AdminUserCreate, db: AsyncSession = Depends(get_db)):
+async def create_user(
+    body: AdminUserCreate,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
     existing = await db.execute(select(User).where(User.email == body.email))
     if existing.scalar_one_or_none():
         raise HTTPException(
@@ -122,6 +128,14 @@ async def create_user(body: AdminUserCreate, db: AsyncSession = Depends(get_db))
     )
     db.add(user)
     await db.flush()
+    audit.record(
+        db,
+        action="user.created",
+        actor=admin,
+        target_type="user",
+        target_id=user.id,
+        summary=f"Created {user.email} ({user.role.value})",
+    )
     return _user_row(user, 0, 0)
 
 
@@ -147,10 +161,27 @@ async def update_user(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Cannot demote the last admin — promote someone else first",
             )
+        previous_role = user.role
         user.role = body.role
+        audit.record(
+            db,
+            action="user.role_changed",
+            actor=admin,
+            target_type="user",
+            target_id=user.id,
+            summary=f"{user.email}: {previous_role.value} → {body.role.value}",
+        )
 
     if body.new_password is not None:
         user.password_hash = hash_password(body.new_password)
+        audit.record(
+            db,
+            action="user.password_reset",
+            actor=admin,
+            target_type="user",
+            target_id=user.id,
+            summary=f"Reset password for {user.email}",
+        )
 
     db.add(user)
     owned, member = await _counts(db, user.id)
@@ -191,4 +222,33 @@ async def delete_user(
             "(deleting the user would delete them for everyone)",
         )
 
+    audit.record(
+        db,
+        action="user.deleted",
+        actor=admin,
+        target_type="user",
+        target_id=user.id,
+        summary=f"Deleted {user.email}",
+    )
     await db.delete(user)
+
+
+@router.get("/audit")
+async def instance_audit(db: AsyncSession = Depends(get_db)):
+    """Instance-level audit entries (admin user management)."""
+    result = await db.execute(
+        select(AuditLog)
+        .where(AuditLog.project_id.is_(None))
+        .order_by(AuditLog.created_at.desc())
+        .limit(100)
+    )
+    return [
+        {
+            "id": str(e.id),
+            "actor_email": e.actor_email,
+            "action": e.action,
+            "summary": e.summary,
+            "created_at": e.created_at.isoformat(),
+        }
+        for e in result.scalars().all()
+    ]

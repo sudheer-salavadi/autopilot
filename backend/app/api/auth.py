@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, EmailStr, field_validator
 from sqlalchemy import select
@@ -8,6 +8,7 @@ from app.api.deps import get_current_user, _get_or_create_dev_user
 from app.config import settings
 from app.db.session import get_db
 from app.models.user import User, UserRole
+from app.services import rate_limit
 from app.services.auth import (
     MAX_PASSWORD_BYTES,
     MIN_PASSWORD_LENGTH,
@@ -93,9 +94,14 @@ async def setup_status(db: AsyncSession = Depends(get_db)):
 @router.post("/signup", status_code=status.HTTP_201_CREATED)
 async def signup(
     body: SignupRequest,
+    request: Request,
     response: Response,
     db: AsyncSession = Depends(get_db),
 ):
+    ip = rate_limit.client_ip(request)
+    rate_limit.enforce((rate_limit.signup_by_ip, ip))
+    rate_limit.signup_by_ip.hit(ip)
+
     # Bootstrap: the account that sets the instance up becomes admin. This
     # also bypasses DISABLE_SIGNUP — a fresh instance with signups disabled
     # would otherwise be unusable.
@@ -131,20 +137,32 @@ async def signup(
 @router.post("/login")
 async def login(
     body: Credentials,
+    request: Request,
     response: Response,
     db: AsyncSession = Depends(get_db),
 ):
+    ip = rate_limit.client_ip(request)
+    account_key = f"login:{body.email}"
+    rate_limit.enforce(
+        (rate_limit.login_by_account, account_key),
+        (rate_limit.login_by_ip, ip),
+    )
+
     result = await db.execute(select(User).where(User.email == body.email))
     user = result.scalar_one_or_none()
 
     # verify_password burns a bcrypt check even when the user doesn't exist
     # or has no password, so response timing doesn't leak which emails exist.
     if not verify_password(body.password, user.password_hash if user else None):
+        rate_limit.login_by_account.hit(account_key)
+        rate_limit.login_by_ip.hit(ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
         )
 
+    # A successful login clears the account's failure window
+    rate_limit.login_by_account.reset(account_key)
     _set_session_cookie(response, user)
     return _user_json(user)
 
@@ -207,11 +225,18 @@ async def change_password(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # Same per-account window as login: a hijacked session can't brute-force
+    # the current password to take the account over fully.
+    account_key = f"login:{current_user.email}"
+    rate_limit.enforce((rate_limit.login_by_account, account_key))
+
     if not verify_password(body.current_password, current_user.password_hash):
+        rate_limit.login_by_account.hit(account_key)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Current password is incorrect",
         )
+    rate_limit.login_by_account.reset(account_key)
     current_user.password_hash = hash_password(body.new_password)
     db.add(current_user)
     return {"ok": True}

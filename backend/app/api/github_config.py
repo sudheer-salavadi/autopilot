@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_project_member, require_project_owner
 from app.config import settings
+from app.services import audit
 from app.db.session import get_db
 from app.models.cluster import Cluster, ClusterEvent
 from app.models.event import Event
@@ -150,7 +151,7 @@ async def create_github_issue(
     db: AsyncSession = Depends(get_db),
 ):
     """Manually file a GitHub issue for a cluster."""
-    project, _, _ = deps
+    project, current_user, _ = deps
 
     # Load cluster
     result = await db.execute(
@@ -226,6 +227,15 @@ async def create_github_issue(
         from app.models.cluster import ClusterStatus
         cluster.status = ClusterStatus.investigating
 
+    audit.record(
+        db,
+        action="cluster.issue_filed",
+        actor=current_user,
+        project_id=project.id,
+        target_type="cluster",
+        target_id=cluster.id,
+        summary=f'Filed {gh_config.repo}#{issue["number"]} for "{cluster.title}"',
+    )
     await db.commit()
     emit_event(project.id, EVENT_CLUSTER_ISSUE_FILED, cluster_payload(cluster))
 

@@ -26,6 +26,7 @@ from app.schemas.agent_config import (
     AgentProviderOut,
     AgentProviderUpdate,
 )
+from app.services import audit
 from app.services import github as gh
 from app.services.coding_agents import PROVIDERS
 from app.services.webhook_dispatch import EVENT_CLUSTER_FIX_REQUESTED, cluster_payload, emit_event
@@ -186,7 +187,7 @@ async def trigger_agent_fix(
     db: AsyncSession = Depends(get_db),
 ):
     """Post the provider's trigger comment on the cluster's filed GitHub issue."""
-    project, _, _ = deps
+    project, current_user, _ = deps
 
     config_result = await db.execute(
         select(ProjectAgentConfig).where(
@@ -242,6 +243,16 @@ async def trigger_agent_fix(
     cluster.fix_pr_url = None
     cluster.fix_pr_state = None
 
+    audit.record(
+        db,
+        action="cluster.fix_requested",
+        actor=current_user,
+        project_id=project.id,
+        target_type="cluster",
+        target_id=cluster.id,
+        summary=f'Triggered {out.name or body.provider} on {gh_config.repo}'
+        f'#{cluster.github_issue_number} for "{cluster.title}"',
+    )
     await db.commit()
     emit_event(project.id, EVENT_CLUSTER_FIX_REQUESTED, cluster_payload(cluster))
 

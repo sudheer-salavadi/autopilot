@@ -16,7 +16,6 @@ import {
   IconPuzzle,
   IconSettings,
   IconSun,
-  IconUsers,
 } from "@tabler/icons-react";
 
 import {
@@ -182,16 +181,6 @@ export default function AppSidebar({
 
       <SidebarFooter>
         <SidebarMenu>
-          {user?.role === "admin" && (
-            <SidebarMenuItem>
-              <SidebarMenuButton asChild isActive={pathname === "/admin"}>
-                <Link href="/admin">
-                  <IconUsers />
-                  Team &amp; access
-                </Link>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          )}
           <SidebarMenuItem>
             <Sheet>
               <SheetTrigger asChild>
