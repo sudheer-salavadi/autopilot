@@ -1,26 +1,44 @@
 # Autopilot
 
-Your AI product manager — pulls signals from Stripe, Sentry, FullStory and Zendesk, groups them by root cause, and tells you what to fix first.
+**The open-source, self-hosted triage layer between your monitoring stack and your coding agents.** Autopilot correlates a Stripe payment failure, the Sentry exception behind it, the FullStory rage-clicks it caused, and the Zendesk tickets it generated into **one root-cause issue**, prices it by **revenue at risk**, files it to GitHub with the evidence attached — and hands it to Claude Code, Codex, Gemini, or any coding agent you run to fix.
 
 ![Autopilot screenshot](frontend/public/screenshot.png)
 
 ## The problem
 
-Product and engineering teams live across four tools — Stripe for revenue, Sentry for errors, FullStory for UX friction, Zendesk for support. Each fires its own alerts. Nobody connects them. The result: hours spent triaging noise while the real issues — the ones that are actually costing you money or users — stay buried across tabs.
+If you're an engineer, product engineer, or a technical founder wearing every hat, your signals live in four vendors: Stripe for revenue, Sentry for errors, FullStory for UX friction, Zendesk for support. Each one alerts correctly. None of them see each other. A failed $12k renewal is a Stripe email, the exception that caused it is a Sentry alert, the users rage-clicking "Renew" are a FullStory dashboard, and the angry ticket lands in Zendesk — four alerts, one bug, and the job of connecting them (and deciding whether it beats everything else in the queue) happens in your head, every time.
 
-Autopilot acts as a product manager that never sleeps: it reads every signal, links related ones across tools, ranks them by business impact, and hands you a clear "fix this next."
+Autopilot automates exactly that triage step: cluster cross-tool signals by root cause, score by business impact in dollars, hand off the fix. It doesn't own your tracker and it doesn't own your agent — it owns the judgment layer in between, and every layer above and below it is swappable.
 
-## What it does
+## The loop
 
-- **Ingests events via webhook** from Stripe, Sentry, FullStory, and Zendesk — or connects any **MCP-compatible server** to pull events on a schedule (no public webhook URL required)
-- **Proactively scouts for problems**, not just reactive ingestion — a scout calls an MCP tool on a schedule and only surfaces an issue when an LLM decides the result is a genuine finding against an objective you write
-- **Clusters events by root cause**, not by source — a Stripe payment failure, a Sentry exception, and a FullStory rage-click from the same checkout flow become one issue, not three alerts
-- **Scores every issue by business impact** — revenue at risk, frequency, and UX friction signals, weighted however you choose
-- **Explains root cause and recommends a fix** — see affected users, cross-source signal breakdown, and a suggested next step
-- **Files GitHub issues** — connect a repo and send any issue to your tracker, pre-written with full context
-- **Fixes with a coding agent** — trigger Claude Code, OpenAI Codex, or Gemini Code Assist on a filed issue with one click, and see the resulting PR linked back automatically
-- **Ask AI** — chat with the data to answer questions like "what's causing the most churn?" or "which users are affected by the checkout bug?"
-- **Every pipeline stage is independently addressable** — outbound webhooks let third parties react to a stage transition (cluster created, scored, issue filed, fix requested, PR linked, resolved) without polling, and a custom scoring webhook can replace the internal prioritization formula entirely
+1. **Ingest** — webhooks from Stripe, Sentry, FullStory, and Zendesk, or pull from any **MCP-compatible server** on a schedule (no public webhook URL required)
+2. **Scout** — proactive scheduled checks against any MCP source that only create an issue when an LLM judges the result a genuine finding against an objective you write; most runs produce nothing, by design
+3. **Cluster** — events group by **root cause across tools** (pgvector similarity + LLM tiebreaker), not by source: one checkout bug is one issue, not four alerts
+4. **Score** — every cluster is ranked by revenue at risk, recency-weighted frequency, and worst observed UX severity, with weights you control — or replace the whole formula with your own scoring webhook
+5. **Recommend** — root cause, affected users, and cross-source signal breakdown synthesized into a concrete next step
+6. **File** — GitHub issues created automatically above your priority threshold, pre-written with full context
+7. **Fix** — trigger Claude Code, OpenAI Codex, Gemini Code Assist, **or any custom agent** on the filed issue; the resulting PR is linked back automatically
+8. **Ask** — chat with the data: "what's causing the most churn?", "which users hit the checkout bug?"
+
+Every stage transition emits a signed outbound webhook (`cluster.created`, `cluster.scored`, `cluster.issue_filed`, `cluster.fix_pr_linked`, ...), so anything downstream — Slack bots, dashboards, your own automation — can react without polling.
+
+## How it compares — PostHog Inbox, Sentry Seer, and DIY
+
+Autopilot runs the same signals → root cause → priority → agent-PR loop as the vertically integrated tools, with the opposite architectural bet: **bring your own everything**.
+
+| | **Autopilot** | **PostHog Inbox** | **Sentry Seer** |
+|---|---|---|---|
+| Signal sources | Any — Stripe/Sentry/FullStory/Zendesk webhooks, any MCP server, scheduled scouts | PostHog's own product suite (error tracking, session replay, experiments, surveys, support) | Errors and traces captured by Sentry |
+| Grouping | Cross-vendor root-cause clustering (embeddings + LLM) | Signals grouped into weighted reports | Per-error issue grouping |
+| Prioritization | Revenue at risk in $, recency-decayed frequency, worst UX severity — weights configurable, formula replaceable via webhook | Report weight crosses a promotion threshold | Error-level severity/volume |
+| Fix agent | Any — Claude Code, Codex, Gemini, or a custom trigger phrase | PostHog Code | Seer autofix (or handoff) |
+| LLM | Bring your own: any OpenAI-compatible endpoint, incl. fully local (Ollama, LM Studio, vLLM) | Theirs | Theirs |
+| Hosting | Self-hosted, Docker Compose, MIT license | PostHog Cloud (self-driving features in beta) | Sentry's cloud |
+
+To be fair to both: if your whole stack already runs on PostHog's SDKs, their Inbox is deeply integrated with data Autopilot never sees, and if a problem is purely a code error, Seer reads stack traces and traces inside Sentry at a depth a webhook consumer can't. Pick Autopilot when your signals are spread across more than one vendor, you want prioritization denominated in dollars rather than event counts, or self-hosting and model choice are non-negotiable.
+
+*Autopilot is not affiliated with or endorsed by PostHog or Sentry (Functional Software, Inc.); product names are used only to identify them. Comparison reflects public docs as of July 2026 — corrections welcome via PR.*
 
 ## Stack
 
