@@ -99,13 +99,20 @@ docker compose exec backend alembic upgrade head
 
 ### 3. Create your account
 
-Visit `http://localhost:3000`, click **Get started**, and create the first account — email and password, stored in your own database (bcrypt-hashed). Teammates sign up the same way, then a project owner adds them under **Settings → Members**.
+Visit `http://localhost:3000`, click **Get started**, and create the first account — email and password, stored in your own database (bcrypt-hashed). **The first account automatically becomes the instance admin.**
 
-Once everyone's in, you can lock registration with `DISABLE_SIGNUP=true` — existing accounts keep working, new signups are rejected.
+### Roles & access
 
-> **Note on password resets:** there is deliberately no email-based reset flow (that would require configuring an SMTP dependency). If someone is locked out, the operator sets a new hash directly: `docker compose exec backend python -c "import bcrypt; print(bcrypt.hashpw(b'newpassword', bcrypt.gensalt()).decode())"` then `UPDATE users SET password_hash='<hash>' WHERE email='<email>';`
+Two independent levels:
 
-> **Upgrading from a WorkOS-based install?** Existing users keep their projects but have no password yet — set one per user with the same SQL as above (signing up again with the same email is blocked by the unique constraint).
+- **Instance roles** (`admin` / `member`): admins get a **Team & access** panel to list users, create accounts directly (with a starting password), change roles, reset passwords, and delete users. Guardrails: the last admin can't be demoted or deleted, and a user who owns projects can't be deleted until those projects are.
+- **Project roles** (`owner` / `member`): unchanged — every project is invisible to non-members, owners manage membership and settings under **Settings → Team**. Being an instance admin does *not* grant access to project data; admins manage accounts, not your signals.
+
+Typical flow: teammates sign up themselves (or an admin creates their accounts), then a project owner invites them by email. Once everyone's in, lock registration with `DISABLE_SIGNUP=true` — existing accounts keep working, and the first-account bootstrap still works on a fresh install so you can't lock yourself out.
+
+Password resets are admin-driven (**Team & access → key icon**) — deliberately no email-based reset flow, so there's no SMTP dependency. Users change their own password under **Settings → Account**.
+
+> **Upgrading from a WorkOS-based install?** Existing users keep their projects but have no password yet — the earliest-created account is backfilled as admin; set its password once via SQL (`docker compose exec backend python -c "import bcrypt; print(bcrypt.hashpw(b'newpassword', bcrypt.gensalt()).decode())"` then `UPDATE users SET password_hash='<hash>' WHERE email='<email>';`), then reset everyone else's from the admin panel.
 
 ## AI model configuration
 

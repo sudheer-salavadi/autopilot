@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user, _get_or_create_dev_user
 from app.config import settings
 from app.db.session import get_db
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.services.auth import (
     MAX_PASSWORD_BYTES,
     MIN_PASSWORD_LENGTH,
@@ -31,7 +31,28 @@ def _set_session_cookie(response: Response, user: User) -> None:
 
 
 def _user_json(user: User) -> dict:
-    return {"id": str(user.id), "email": user.email, "name": user.name}
+    return {
+        "id": str(user.id),
+        "email": user.email,
+        "name": user.name,
+        "role": user.role.value,
+    }
+
+
+async def _admin_exists(db: AsyncSession) -> bool:
+    """True when an admin who can actually log in exists.
+
+    Passwordless admins don't count: the SKIP_AUTH dev user (and users
+    migrated from the WorkOS era before an operator sets their password)
+    can't authenticate, and treating them as "the admin" would leave an
+    instance that switches SKIP_AUTH off with no way to administer itself.
+    """
+    result = await db.execute(
+        select(User.id)
+        .where(User.role == UserRole.admin, User.password_hash.is_not(None))
+        .limit(1)
+    )
+    return result.scalar_one_or_none() is not None
 
 
 class Credentials(BaseModel):
@@ -57,17 +78,34 @@ class SignupRequest(Credentials):
         return v
 
 
+@router.get("/setup-status")
+async def setup_status(db: AsyncSession = Depends(get_db)):
+    """Public first-run probe: does this instance have an admin yet?
+
+    The login page uses this to offer "create the admin account" on a fresh
+    install instead of a sign-in form nobody has credentials for.
+    """
+    if settings.SKIP_AUTH:
+        return {"needs_setup": False}
+    return {"needs_setup": not await _admin_exists(db)}
+
+
 @router.post("/signup", status_code=status.HTTP_201_CREATED)
 async def signup(
     body: SignupRequest,
     response: Response,
     db: AsyncSession = Depends(get_db),
 ):
-    if settings.DISABLE_SIGNUP:
+    # Bootstrap: the account that sets the instance up becomes admin. This
+    # also bypasses DISABLE_SIGNUP — a fresh instance with signups disabled
+    # would otherwise be unusable.
+    first_admin = not await _admin_exists(db)
+
+    if settings.DISABLE_SIGNUP and not first_admin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Signups are disabled on this instance (DISABLE_SIGNUP=true). "
-            "Ask the person running it to create your account.",
+            "Ask your admin to create your account.",
         )
 
     existing = await db.execute(select(User).where(User.email == body.email))
@@ -81,6 +119,7 @@ async def signup(
         email=body.email,
         name=body.name.strip() or body.email.split("@")[0],
         password_hash=hash_password(body.password),
+        role=UserRole.admin if first_admin else UserRole.member,
     )
     db.add(user)
     await db.flush()
@@ -146,6 +185,36 @@ async def update_me(
         current_user.name = body.name.strip()
     db.add(current_user)
     return _user_json(current_user)
+
+
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def password_strength(cls, v: str) -> str:
+        if len(v) < MIN_PASSWORD_LENGTH:
+            raise ValueError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters")
+        if len(v.encode()) > MAX_PASSWORD_BYTES:
+            raise ValueError(f"Password must be at most {MAX_PASSWORD_BYTES} bytes")
+        return v
+
+
+@router.post("/change-password")
+async def change_password(
+    body: PasswordChange,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if not verify_password(body.current_password, current_user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Current password is incorrect",
+        )
+    current_user.password_hash = hash_password(body.new_password)
+    db.add(current_user)
+    return {"ok": True}
 
 
 @router.get("/logout")

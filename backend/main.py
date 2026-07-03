@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api import agent_config, auth, chat, clusters, dashboard, demo, events, github_config, integrations, members, projects, scoring_config, scouts, webhook_subscriptions, webhooks
+from app.api import admin, agent_config, auth, chat, clusters, dashboard, demo, events, github_config, integrations, members, projects, scoring_config, scouts, webhook_subscriptions, webhooks
 from app.config import settings
 from app.db.session import AsyncSessionLocal
 from app.services.demo import simulate_active_projects
@@ -241,6 +241,7 @@ app.add_middleware(
 )
 
 app.include_router(auth.router)
+app.include_router(admin.router)
 app.include_router(projects.router)
 app.include_router(members.router)
 app.include_router(integrations.router)
