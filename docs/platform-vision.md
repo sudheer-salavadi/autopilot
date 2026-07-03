@@ -44,6 +44,58 @@ evaluation of the **clustering/scoring logic itself** is done too — see
 "Shipped: clustering/scoring correctness pass" below and the full
 findings-and-reasoning write-up in `docs/clustering-evaluation.md`.
 
+## Shipped: instance RBAC (first-account admin + user management)
+
+**Why:** after auth became self-contained there was still no instance-level
+"operator" concept — the first user wasn't special, managing accounts or
+resetting a password meant SQL, and DISABLE_SIGNUP was the only lever.
+
+**Design:**
+- `User.role` (`admin`/`member`), independent of per-project `MemberRole`
+  (`owner`/`member`). Admins manage *accounts*, not project data — project
+  access still requires membership. Two small orthogonal role systems, not
+  a permission matrix.
+- Bootstrap: the first account created becomes admin (also bypasses
+  DISABLE_SIGNUP so a locked fresh instance isn't a deadlock). The check is
+  "no *login-capable* admin exists" (`role=admin AND password_hash IS NOT
+  NULL`) so a SKIP_AUTH dev-user admin or an unmigrated WorkOS-era admin
+  doesn't block real bootstrap. Migration `0022` backfills the
+  earliest-created user as admin on existing installs.
+- `/api/admin/users` (admin-gated): list/create/patch-role/reset-password/
+  delete, with guardrails — can't demote or delete the last login-capable
+  admin, can't delete yourself, can't delete a user who owns projects
+  (owner FK cascades would silently delete the projects for everyone).
+- Self-service `POST /api/auth/change-password`; admin reset closes the
+  no-SMTP password-reset gap properly (no more SQL for routine resets).
+- First-run UX: public `GET /api/auth/setup-status` lets the login page
+  open in "create the admin account" mode on a fresh instance.
+- Frontend: `/admin` ("Team & access", sidebar link visible to admins only),
+  password-change form in account settings.
+
+**Deliberately NOT built — read before "improving" this:**
+- No fine-grained per-action permissions (who may file GitHub issues,
+  trigger coding agents, edit integrations). Evaluated and rejected at
+  current scale: project membership already isolates data, and the actual
+  need behind such asks is accountability, which is better served by an
+  audit trail (cheap next step: record who triggered fixes/filed issues)
+  than by an ACL matrix that taxes every future endpoint.
+- No `viewer` project role yet — add it as one role, not a matrix, when a
+  concrete "read-only stakeholder" ask appears.
+
+**Validation:** 17 API-level checks (bootstrap, role gating, last-admin and
+self-delete guards, owned-projects guard, admin reset + change-password
+round-trips, DISABLE_SIGNUP bypass on fresh install, migration backfill on
+a simulated existing install) plus a 7-step Playwright run (first-run
+setup copy → admin signup → panel → create user → member sees no admin UI
+→ direct /admin access denied). Frontend production build passes; single
+Alembic head (`0022`).
+
+**Files touched:** `models/user.py`, `alembic/versions/0022_user_roles.py`
+(new), `api/admin.py` (new), `api/auth.py`, `api/deps.py`, `main.py`,
+`frontend/app/(app)/admin/page.tsx` (new), `frontend/app/login/page.tsx`,
+`components/AppSidebar.tsx`, `components/AccountSettings.tsx`,
+`app/(app)/layout.tsx`, README.
+
 ## Shipped: self-contained auth (WorkOS removed)
 
 **Why:** WorkOS was the last third-party service a real (non-`SKIP_AUTH`)

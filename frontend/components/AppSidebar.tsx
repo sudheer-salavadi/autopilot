@@ -16,6 +16,7 @@ import {
   IconPuzzle,
   IconSettings,
   IconSun,
+  IconUsers,
 } from "@tabler/icons-react";
 
 import {
@@ -54,6 +55,7 @@ interface User {
   id: string;
   email: string;
   name: string;
+  role?: "admin" | "member";
 }
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -180,6 +182,16 @@ export default function AppSidebar({
 
       <SidebarFooter>
         <SidebarMenu>
+          {user?.role === "admin" && (
+            <SidebarMenuItem>
+              <SidebarMenuButton asChild isActive={pathname === "/admin"}>
+                <Link href="/admin">
+                  <IconUsers />
+                  Team &amp; access
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          )}
           <SidebarMenuItem>
             <Sheet>
               <SheetTrigger asChild>

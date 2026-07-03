@@ -41,6 +41,31 @@ export default function AccountSettings({ slug, projectName, userName }: Props) 
     }
   }
 
+  // Password change state
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [pwStatus, setPwStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [pwError, setPwError] = useState<string | null>(null);
+
+  async function changePassword(e: React.FormEvent) {
+    e.preventDefault();
+    setPwStatus("saving");
+    setPwError(null);
+    try {
+      await apiClient().post(`/api/auth/change-password`, {
+        current_password: currentPassword,
+        new_password: newPassword,
+      });
+      setPwStatus("saved");
+      setCurrentPassword("");
+      setNewPassword("");
+      setTimeout(() => setPwStatus("idle"), 2000);
+    } catch (err) {
+      setPwStatus("error");
+      setPwError(err instanceof Error ? err.message : "Failed to change password.");
+    }
+  }
+
   async function saveUserName(e: React.FormEvent) {
     e.preventDefault();
     const fullName = [firstName.trim(), lastName.trim()].filter(Boolean).join(" ");
@@ -132,6 +157,53 @@ export default function AccountSettings({ slug, projectName, userName }: Props) 
             }
           >
             {userStatus === "saving" ? "Saving…" : userStatus === "saved" ? "Saved" : "Save"}
+          </Button>
+        </form>
+      </section>
+
+      <hr />
+
+      {/* Password */}
+      <section className="space-y-4">
+        <div>
+          <h2 className="text-sm font-semibold">Password</h2>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            Change the password you sign in with. Forgot it? An instance admin
+            can reset it from Team &amp; access.
+          </p>
+        </div>
+        <form onSubmit={changePassword} className="space-y-3">
+          <div className="space-y-1.5">
+            <Label htmlFor="current-password">Current password</Label>
+            <Input
+              id="current-password"
+              type="password"
+              autoComplete="current-password"
+              value={currentPassword}
+              onChange={(e) => { setCurrentPassword(e.target.value); setPwStatus("idle"); }}
+              disabled={pwStatus === "saving"}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="new-password">New password</Label>
+            <Input
+              id="new-password"
+              type="password"
+              autoComplete="new-password"
+              minLength={8}
+              value={newPassword}
+              onChange={(e) => { setNewPassword(e.target.value); setPwStatus("idle"); }}
+              placeholder="At least 8 characters"
+              disabled={pwStatus === "saving"}
+            />
+          </div>
+          {pwError && <p className="text-sm text-destructive">{pwError}</p>}
+          <Button
+            type="submit"
+            size="sm"
+            disabled={pwStatus === "saving" || !currentPassword || newPassword.length < 8}
+          >
+            {pwStatus === "saving" ? "Saving…" : pwStatus === "saved" ? "Changed" : "Change password"}
           </Button>
         </form>
       </section>

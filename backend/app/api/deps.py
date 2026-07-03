@@ -5,18 +5,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.db.session import get_db
 from app.models.project import MemberRole, Project, ProjectMember
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.services.auth import verify_session_token
 
 _DEV_USER_EMAIL = "dev@localhost"
 
 
 async def _get_or_create_dev_user(db: AsyncSession) -> User:
-    """The shared no-password user every request runs as when SKIP_AUTH=true."""
+    """The shared no-password user every request runs as when SKIP_AUTH=true.
+
+    Instance admin, so the whole product (including the admin panel) is
+    reachable in the zero-config evaluation mode.
+    """
     result = await db.execute(select(User).where(User.email == _DEV_USER_EMAIL))
     user = result.scalar_one_or_none()
     if not user:
-        user = User(email=_DEV_USER_EMAIL, name="Dev User", password_hash=None)
+        user = User(
+            email=_DEV_USER_EMAIL, name="Dev User",
+            password_hash=None, role=UserRole.admin,
+        )
         db.add(user)
         await db.flush()
     return user
@@ -42,6 +49,17 @@ async def get_current_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
 
     return user
+
+
+async def require_admin(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """Instance-admin gate for user-management endpoints."""
+    if current_user.role != UserRole.admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Instance admin role required"
+        )
+    return current_user
 
 
 async def get_project_by_slug(

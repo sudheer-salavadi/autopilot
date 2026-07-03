@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,21 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [needsSetup, setNeedsSetup] = useState(false);
+
+  // First-run: no admin exists yet → offer account creation up front,
+  // and tell the user this account will be the instance admin.
+  useEffect(() => {
+    fetch(`${API_URL}/api/auth/setup-status`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((s) => {
+        if (s?.needs_setup) {
+          setNeedsSetup(true);
+          setMode("signup");
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -62,9 +77,11 @@ export default function LoginPage() {
             Autopilot
           </Link>
           <p className="text-sm text-muted-foreground">
-            {mode === "login"
-              ? "Sign in to your self-hosted instance"
-              : "Create an account on this instance"}
+            {needsSetup && mode === "signup"
+              ? "Set up this instance — the first account becomes the admin"
+              : mode === "login"
+                ? "Sign in to your self-hosted instance"
+                : "Create an account on this instance"}
           </p>
         </div>
 
